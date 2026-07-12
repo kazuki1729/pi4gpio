@@ -61,11 +61,25 @@ impl From<&BusRef> for BusId {
     }
 }
 
+/// GPIO入力のプルアップ/ダウン設定。`pi4gpio_hw::gpio::PullMode`のワイヤー版。
+#[derive(Debug, Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PullWire {
+    #[default]
+    None,
+    Up,
+    Down,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
-    // GPIO用: 1ビット単位。
-    Read,
+    // GPIO用: 1ビット単位。`pull`省略時はNone（フィールドを省略できる
+    // クライアントとの互換のため`#[serde(default)]`）。
+    Read {
+        #[serde(default)]
+        pull: PullWire,
+    },
     Write {
         value: bool,
     },

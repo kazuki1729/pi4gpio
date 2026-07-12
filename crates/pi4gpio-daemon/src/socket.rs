@@ -6,7 +6,7 @@
 use crate::client::ClientId;
 use crate::config::Config;
 use crate::lock::{BusId, LockTable};
-use crate::protocol::{BusRef, EdgeEventWire, Operation, Request, Response};
+use crate::protocol::{BusRef, EdgeEventWire, Operation, PullWire, Request, Response};
 use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
 use pi4gpio_hw::gpio_watch::EdgeWatcher;
 use pi4gpio_hw::i2c::I2cBus;
@@ -169,13 +169,21 @@ fn dispatch(
     }
 }
 
+fn pull_mode_from_wire(pull: PullWire) -> PullMode {
+    match pull {
+        PullWire::None => PullMode::None,
+        PullWire::Up => PullMode::Up,
+        PullWire::Down => PullMode::Down,
+    }
+}
+
 fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
     match op {
-        Operation::Read | Operation::Write { .. } => {
+        Operation::Read { .. } | Operation::Write { .. } => {
             let mut chip = gpio.lock().expect("gpio mutex poisoned");
             let result = match op {
-                Operation::Read => chip
-                    .claim_input(pin, PullMode::None)
+                Operation::Read { pull } => chip
+                    .claim_input(pin, pull_mode_from_wire(*pull))
                     .and_then(|()| chip.read(pin))
                     .map(|level| level == Level::High),
                 Operation::Write { value } => {
@@ -276,7 +284,7 @@ fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> R
                 Err(err) => Response::hw_error(&err.to_string()),
             }
         }
-        Operation::Read
+        Operation::Read { .. }
         | Operation::Write { .. }
         | Operation::Transfer { .. }
         | Operation::WatchEdges { .. } => Response::malformed("i2cバスにはこの操作は使えません"),
@@ -302,7 +310,7 @@ fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevic
                 Err(err) => Response::hw_error(&err.to_string()),
             }
         }
-        Operation::Read
+        Operation::Read { .. }
         | Operation::Write { .. }
         | Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
@@ -335,7 +343,7 @@ fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>
             Ok(_) => Response::ok(),
             Err(err) => Response::hw_error(&err.to_string()),
         },
-        Operation::Read
+        Operation::Read { .. }
         | Operation::Write { .. }
         | Operation::WriteReadBytes { .. }
         | Operation::Transfer { .. }
