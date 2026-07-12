@@ -230,3 +230,16 @@ Tier 2のGPIOエッジ検出/通知が実機で正しく動作することを確
 
 ### 結果
 `MIGRATION_PLAN.md`のセンサー移行順序2番目（`bme280_pressure.py`）の二重モード化が完了した。`Pi4gpioSMBusShim`は他のI2Cセンサーでも再利用できる汎用設計のため、今後I2Cセンサーが増えても流用できる。次は3番目のSPI系3センサー（`grove_mcp3208_sensors.py`・`joystick_mcp3208.py`・`potentiometer_mcp3208.py`）。
+
+## 2026-07-13: `rpi-sensor-lib`二重モード化（SPI系3センサー）の実機検証
+
+### 設計: spidev互換シム
+`grove_mcp3208_sensors.py`・`joystick_mcp3208.py`・`potentiometer_mcp3208.py`の3ファイルとも、実際に使う`spidev.SpiDev`のメソッドは`xfer2()`のみだったため、`_pi4gpio_backend.py`に`Pi4gpioSpiTransferShim`（`xfer2()`と`close()`のみを実装）を追加した。`spidev.SpiDev()`＋`.open(bus, device)`という2段階構築とは異なりコンストラクタで`bus`/`chip_select`を直接指定する設計だが、`xfer2()`の呼び出し側（各センサークラスの`read_raw`/`_read_adc`）は無改造で済んだ。
+
+### 実施内容・結果
+1. **ローカル検証**: `xfer2([0x06,0x00,0x00])`のワイヤーエンコードと、12ビットADC値の組み立てロジックを疑似サーバーで確認
+2. **実機検証**: 本番稼働中の`/dev/spidev0.0`に対し、`PotentiometerMCP3208.read_raw()`と`JoystickMCP3208.read_xy()`を`direct`/`pi4gpio`両モードで実行。両方とも`0`・`(0, 0)`で完全一致——Tier 1のSPI検証時と同じ「センサー基盤未接続」の既知パターンと整合
+3. 本番サービスのPID・保持デバイスに最後まで変化なし。テスト用に転送したディレクトリ・一時ファイルを全て削除
+
+### 結果
+`MIGRATION_PLAN.md`のセンサー移行順序3番目（SPI系3センサー）の二重モード化が完了した。残るは4番目（`mh_x19c_co2.py`、UART）と5番目（`robust_dht22.py`、Tier 2のDHT22デコード実装が必要）。
