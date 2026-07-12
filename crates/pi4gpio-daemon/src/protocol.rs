@@ -4,8 +4,9 @@
 //! 最適化は、Tier 1操作が実装されパフォーマンス要件が明確になってから検討する
 //! （現段階ではPythonクライアント側での可読性・実装のしやすさを優先）。
 //!
-//! `Operation`はGPIO用（`Read`/`Write`、1ビット単位）とI2C用
-//! （`ReadBytes`/`WriteBytes`/`WriteReadBytes`、バイト列単位）に分かれる。
+//! `Operation`はGPIO用（`Read`/`Write`、1ビット単位）、I2C用
+//! （`ReadBytes`/`WriteBytes`/`WriteReadBytes`、方向が別々のバイト列）、
+//! SPI用（`Transfer`、送信と同時に同じ長さを受信する全二重転送）に分かれる。
 //! バスの種類に合わない操作が来た場合は`socket.rs`の`dispatch`が
 //! `malformed`で拒否する。
 //!
@@ -52,10 +53,12 @@ pub enum Operation {
     // GPIO用: 1ビット単位。
     Read,
     Write { value: bool },
-    // I2C用: バイト列単位（将来SPI/UARTでも流用予定）。
+    // I2C用: 方向が別々のバイト列（将来UARTでも流用予定）。
     ReadBytes { length: usize },
     WriteBytes { data: Vec<u8> },
     WriteReadBytes { data: Vec<u8>, length: usize },
+    // SPI用: 送信と同時に同じ長さを受信する全二重転送。
+    Transfer { data: Vec<u8> },
     Release,
 }
 

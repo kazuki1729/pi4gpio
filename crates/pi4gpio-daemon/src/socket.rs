@@ -9,6 +9,8 @@ use crate::lock::{BusId, LockTable};
 use crate::protocol::{BusRef, Operation, Request, Response};
 use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
 use pi4gpio_hw::i2c::I2cBus;
+use pi4gpio_hw::spi::SpiDevice;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -20,6 +22,8 @@ use tokio::signal::unix::{signal, SignalKind};
 /// （`/dev/i2c-0`と`/dev/i2c-1`の両方が存在しうるため、GPIOのようにプロセス
 /// 起動時点で単一インスタンスを確保する構成にできない）。
 type I2cBuses = HashMap<u8, I2cBus>;
+/// SPIも同様に`(bus, chip_select)`ごとに初回アクセス時に開く。
+type SpiDevices = HashMap<(u8, u8), SpiDevice>;
 
 pub async fn serve(config: &Config) -> io::Result<()> {
     if let Some(parent) = std::path::Path::new(&config.socket_path).parent() {
@@ -35,6 +39,7 @@ pub async fn serve(config: &Config) -> io::Result<()> {
         GpioChip::open().map_err(|e| io::Error::other(e.to_string()))?,
     ));
     let i2c: Arc<Mutex<I2cBuses>> = Arc::new(Mutex::new(HashMap::new()));
+    let spi: Arc<Mutex<SpiDevices>> = Arc::new(Mutex::new(HashMap::new()));
     let mut sigterm = signal(SignalKind::terminate())?;
 
     loop {
@@ -44,8 +49,9 @@ pub async fn serve(config: &Config) -> io::Result<()> {
                 let locks = Arc::clone(&locks);
                 let gpio = Arc::clone(&gpio);
                 let i2c = Arc::clone(&i2c);
+                let spi = Arc::clone(&spi);
                 tokio::spawn(async move {
-                    if let Err(err) = handle_client(stream, locks, gpio, i2c).await {
+                    if let Err(err) = handle_client(stream, locks, gpio, i2c, spi).await {
                         eprintln!("pi4gpiod: client session ended with error: {err}");
                     }
                 });
@@ -70,6 +76,7 @@ async fn handle_client(
     locks: Arc<LockTable>,
     gpio: Arc<Mutex<GpioChip>>,
     i2c: Arc<Mutex<I2cBuses>>,
+    spi: Arc<Mutex<SpiDevices>>,
 ) -> io::Result<()> {
     let client_id = ClientId::from_unix_stream(&stream)?;
     println!("pi4gpiod: client connected ({client_id:?})");
@@ -84,7 +91,15 @@ async fn handle_client(
         }
 
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(&request, &client_id, &locks, &mut held_buses, &gpio, &i2c),
+            Ok(request) => dispatch(
+                &request,
+                &client_id,
+                &locks,
+                &mut held_buses,
+                &gpio,
+                &i2c,
+                &spi,
+            ),
             Err(err) => Response::malformed(&err.to_string()),
         };
 
@@ -108,6 +123,7 @@ fn dispatch(
     held_buses: &mut HashSet<BusId>,
     gpio: &Mutex<GpioChip>,
     i2c: &Mutex<I2cBuses>,
+    spi: &Mutex<SpiDevices>,
 ) -> Response {
     let bus: BusId = (&request.bus).into();
 
@@ -129,8 +145,9 @@ fn dispatch(
     match &request.bus {
         BusRef::Gpio { pin } => handle_gpio(*pin, &request.op, gpio),
         BusRef::I2c { bus, addr } => handle_i2c(*bus, *addr, &request.op, i2c),
-        // SPI/UARTはpi4gpio-hw側が未実装のため引き続きnot_implemented。
-        BusRef::Spi { .. } | BusRef::Uart { .. } => Response::not_implemented(),
+        BusRef::Spi { bus, chip_select } => handle_spi(*bus, *chip_select, &request.op, spi),
+        // UARTはpi4gpio-hw側が未実装のため引き続きnot_implemented。
+        BusRef::Uart { .. } => Response::not_implemented(),
     }
 }
 
@@ -149,8 +166,9 @@ fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
         }
         Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
-        | Operation::WriteReadBytes { .. } => {
-            return Response::malformed("gpioバスにバイト列操作は使えません");
+        | Operation::WriteReadBytes { .. }
+        | Operation::Transfer { .. } => {
+            return Response::malformed("gpioバスにはバイト列操作は使えません");
         }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     };
@@ -164,8 +182,8 @@ fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
 fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> Response {
     let mut buses = i2c.lock().expect("i2c mutex poisoned");
     let bus = match buses.entry(bus_num) {
-        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-        std::collections::hash_map::Entry::Vacant(entry) => match I2cBus::open(bus_num) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => match I2cBus::open(bus_num) {
             Ok(opened) => entry.insert(opened),
             Err(err) => return Response::hw_error(&err.to_string()),
         },
@@ -190,8 +208,37 @@ fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> R
                 Err(err) => Response::hw_error(&err.to_string()),
             }
         }
-        Operation::Read | Operation::Write { .. } => {
-            Response::malformed("i2cバスに1ビット単位の操作は使えません")
+        Operation::Read | Operation::Write { .. } | Operation::Transfer { .. } => {
+            Response::malformed("i2cバスにはこの操作は使えません")
+        }
+        Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
+    }
+}
+
+fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevices>) -> Response {
+    let mut devices = spi.lock().expect("spi mutex poisoned");
+    let device = match devices.entry((bus_num, chip_select)) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => match SpiDevice::open(bus_num, chip_select) {
+            Ok(opened) => entry.insert(opened),
+            Err(err) => return Response::hw_error(&err.to_string()),
+        },
+    };
+
+    match op {
+        Operation::Transfer { data } => {
+            let mut rx = vec![0u8; data.len()];
+            match device.transfer(data, &mut rx) {
+                Ok(()) => Response::bytes(rx),
+                Err(err) => Response::hw_error(&err.to_string()),
+            }
+        }
+        Operation::Read
+        | Operation::Write { .. }
+        | Operation::ReadBytes { .. }
+        | Operation::WriteBytes { .. }
+        | Operation::WriteReadBytes { .. } => {
+            Response::malformed("spiバスにはこの操作は使えません")
         }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
