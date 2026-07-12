@@ -8,10 +8,11 @@ Raspberry Pi 4（BCM2711）向けの、pigpio後継となるGPIO/SPI/I2C/UART共
 - [FEATURE_PRIORITY.md](FEATURE_PRIORITY.md) — 機能優先順位（Tier分け）
 - [NETWORK_POLICY.md](NETWORK_POLICY.md) — ネットワーク制御方針
 - [MIGRATION_PLAN.md](MIGRATION_PLAN.md) — `rpi-sensor-lib`移行計画
+- [VERIFICATION_LOG.md](VERIFICATION_LOG.md) — 実機での動作確認記録
 
 ## 現在の状態
 
-設計フェーズを終え、Rust雛形を作成した段階。`crates/pi4gpio-hw`のGPIO/I2C/SPI/UARTはスタブ（`todo!()`）のみで、実際のレジスタ操作は未実装。
+Rust雛形を実機（`kazuki1729.local`）で初回起動確認済み（`VERIFICATION_LOG.md`参照）。`crates/pi4gpio-hw`のGPIO/I2C/SPI/UARTはスタブ（`todo!()`）のみで、実際のレジスタ操作は未実装。
 
 ## 構成
 
