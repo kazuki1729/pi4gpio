@@ -243,3 +243,16 @@ Tier 2のGPIOエッジ検出/通知が実機で正しく動作することを確
 
 ### 結果
 `MIGRATION_PLAN.md`のセンサー移行順序3番目（SPI系3センサー）の二重モード化が完了した。残るは4番目（`mh_x19c_co2.py`、UART）と5番目（`robust_dht22.py`、Tier 2のDHT22デコード実装が必要）。
+
+## 2026-07-13: `rpi-sensor-lib`二重モード化（`mh_x19c_co2.py`）の実機検証
+
+### 設計: pyserial互換シム
+`mh_x19c_co2.py`が実際に使う`serial.Serial`のメソッドは`write()`/`read()`/`close()`/`is_open`属性のみだったため、`_pi4gpio_backend.py`に`Pi4gpioSerialShim`を追加した。pyserialの`port`パラメータ（デバイスパス文字列）とpi4gpiodの命名規約（ポート番号→`/dev/ttyS{port}`）が異なる点は、pi4gpioモードではポート0固定（このPiにはUARTが1系統しかないため）として吸収した。
+
+### 実施内容・結果
+1. **ローカル検証**: `write()`/`read()`のワイヤーエンコードと、既存のCO2濃度計算ロジック（`result[2]*256+result[3]`）が疑似応答（0x01F4→500ppm）に対して正しく動作することを確認
+2. **実機検証**: UARTはtermiosがデバイス単位の共有状態のため、Tier 1のUART検証時と同様`rpi-hw-lock`の`exclusive_hardware_access()`で本番サービスを一時停止した区間内で実施。`direct`（pyserial）・`pi4gpio`（シム経由）とも`read_co2()`が`None`を返し（センサー未接続によるタイムアウト、ハングなし）一致。`rpi-hw-lock`は今回も本番サービスを正しく再開した
+3. 本番サービスのPID・保持デバイスに最後まで変化なし。テスト用に転送したディレクトリ・一時ファイルを全て削除
+
+### 結果
+`MIGRATION_PLAN.md`のセンサー移行順序4番目（`mh_x19c_co2.py`）の二重モード化が完了した。残るは5番目（`robust_dht22.py`）のみ——Tier 2のGPIO通知/コールバックに依存し、DHT22固有の40ビットデコードロジックを新たに実装する必要がある、移行の中で最も難度が高い部分。
