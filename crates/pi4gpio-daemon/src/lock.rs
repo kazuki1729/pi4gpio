@@ -5,15 +5,15 @@
 //! （SESSION_HANDOFF.md §3、MIGRATION_PLAN.md）。
 //!
 //! TODO: 優先度付け・タイムアウト・デッドロック回避。
-//! TODO: クライアント切断検知時の自動解放（ソケットクローズをトリガーに）。
+//!
+//! クライアント切断時の自動解放は、`socket.rs`の接続ハンドラが保持中の
+//! `BusId`集合を追跡し、ループ終了時（正常/異常問わず）に`release`を
+//! 呼ぶことで実現している。
 
 use crate::client::ClientId;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-// socket.rsの接続受付ループがまだLockTableを配線していないため未使用。
-// TODO: 配線が終わったらこの#[allow(dead_code)]は外す。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BusId {
     Gpio(u32),
@@ -22,13 +22,11 @@ pub enum BusId {
     Uart(u8),
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct LockTable {
     holders: Mutex<HashMap<BusId, ClientId>>,
 }
 
-#[allow(dead_code)]
 impl LockTable {
     pub fn new() -> Self {
         Self::default()

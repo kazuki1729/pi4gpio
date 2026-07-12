@@ -1,6 +1,7 @@
 mod client;
 mod config;
 mod lock;
+mod protocol;
 mod socket;
 
 use std::process::ExitCode;
