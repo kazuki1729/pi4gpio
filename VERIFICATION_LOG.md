@@ -215,3 +215,18 @@ Tier 2のGPIOエッジ検出/通知が実機で正しく動作することを確
 4. テスト用に転送した`rpi-sensor-lib-test`ディレクトリ・一時ファイルを全て削除
 
 これで`MIGRATION_PLAN.md`のセンサー移行順序1番目（`tactile_button.py`）の二重モード化が完了した。次は2番目の`bme280_pressure.py`。
+
+## 2026-07-13: `rpi-sensor-lib`二重モード化（`bme280_pressure.py`）の実機検証
+
+### 設計: smbus2互換シム
+`bme280`パッケージ（`RPi.bme280`）の実際のソースを確認し、`smbus2.SMBus`に対して呼んでいるメソッドが`write_byte_data`/`read_byte_data`/`read_word_data`/`read_i2c_block_data`の4つだけであることを確認した上で、`_pi4gpio_backend.py`に`Pi4gpioSMBusShim`（この4メソッドのみを実装し、内部でpi4gpioクライアントのI2C操作を呼ぶ）を追加した。`bme280`パッケージ自体は無改造。
+
+`read_word_data`はSMBusのプロトコル上リトルエンディアン（下位バイトが先）で送られてくる（`bme280/reader.py`のコメント「default is little endian」で確認）ため、`data[0] | (data[1] << 8)`で組み立てる実装とした。`close()`も`smbus2.SMBus`と同じインターフェースで持たせ（内部は`i2c_release`を呼ぶだけ）、`BME280Sensor.close()`側はbackendで分岐せず`self.bus.close()`のみで済むようにした。
+
+### 実施内容・結果
+1. **ローカル検証（Windows、`socket.socketpair()`で疑似サーバー）**: シムの4メソッド全てのワイヤーエンコードを検証。特に`read_word_data`のリトルエンディアン変換（`bytes=[0x11,0x22]`→`0x2211`）を明示的に確認
+2. **実機検証**: `direct`（`smbus2.SMBus`）と`pi4gpio`（シム経由）の両方で`BME280Sensor`を初期化・`read()`を実行し突き合わせ。センサーは引き続き物理的に未接続のため値は取得できなかったが、**両方とも同一の失敗モード（`Errno 5: Input/output error`）で一致**——直接アクセスとシム経由で全く同じ挙動を示すことを確認した
+3. 本番サービスのPID・保持デバイスに最後まで変化なし。テスト用に転送したディレクトリ・一時ファイルを全て削除
+
+### 結果
+`MIGRATION_PLAN.md`のセンサー移行順序2番目（`bme280_pressure.py`）の二重モード化が完了した。`Pi4gpioSMBusShim`は他のI2Cセンサーでも再利用できる汎用設計のため、今後I2Cセンサーが増えても流用できる。次は3番目のSPI系3センサー（`grove_mcp3208_sensors.py`・`joystick_mcp3208.py`・`potentiometer_mcp3208.py`）。
