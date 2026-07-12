@@ -194,3 +194,24 @@ Tier 2のGPIOエッジ検出/通知が実機で正しく動作することを確
 
 ### 結果
 これで、Tier 1/2の全機能がPythonクライアント経由でも正しく利用できることを実機で確認できた。**実機に接続する初回テストを行わなければ、`Operation`のタグ付け誤りに気づかないままリリースしていた**——GPIOのPullMode符号バグ・UARTの無期限ブロックバグに続き、実機検証で発見した3件目の実運用上の欠陥。次はこのクライアントを使った`rpi-sensor-lib`側の二重モード化に進む。
+
+## 2026-07-13: GPIO Readへのプルモード追加、および`rpi-sensor-lib`二重モード化（`tactile_button.py`）の実機検証
+
+### GPIO Readへのpullフィールド追加
+`rpi-sensor-lib`の二重モード化に着手した直後、`tactile_button.py`が`lgpio.SET_PULL_UP`を使っており、当時`PullMode::None`固定だったワイヤープロトコルの`Read`操作では表現できないことが判明した。`Operation::Read`を`Read`（unit variant）から`Read { pull: PullWire }`（`#[serde(default)]`でNoneがデフォルト）に変更し、`pi4gpio_client.gpio_read()`にも`pull`引数を追加。実機でGPIO17に対し`pull="up"`→High、`pull="down"`→Lowを確認（Tier 1のGPIO検証時と同じ電気的挙動と整合）。本番サービスへの影響なし。
+
+### `tactile_button.py`の二重モード化
+`rpi-sensor-lib`（`C:\Users\Kazuki\github-ripo\`）に`_pi4gpio_backend.py`（`RPI_SENSOR_BACKEND`環境変数での切り替え、プロセス内で1つの`Pi4gpioClient`接続を共有する設計）を追加し、`tactile_button.py`を二重モード化した。`pi4gpio_client`は明示的にオプトインした場合のみ遅延importする（`direct`のみの利用者に不要な依存を強制しないため）。
+
+検証は、本番venv（`sensor-tiered-store/.venv`、`lgpio`等が既にインストール済み）をそのまま使い、`sys.path`操作でこのvenvの`rpi_sensors`本体だけをローカル修正版に差し替える方式で行った（`pip install`で本番venvを変更しない）。本番の`sensor-tiered-client.service`が実際に使っているGPIO6/26とは別に、Tier 1検証以来使ってきたGPIO17を対象にした。
+
+### 実機での発見: バックエンド切替の過渡的な状態変化（バグではない）
+1プロセス内で`direct`モードの`TactileButton`を使った直後に`pi4gpio`モードの`TactileButton`へ切り替えるテストで、押されていないはずのGPIO17が一瞬「押された→離された」という状態変化を記録した。`pi4gpio`モード単独で50回連続読み取りを行ったところ状態変化は0回だったため、**バックエンド切替（`gpiochip`解放から`/dev/gpiomem`のプル再設定までの一瞬の隙間）に起因する過渡現象であり、どちらの実装単体のバグではない**と判断した。実際の移行ではバックエンド切替は環境変数＋サービス再起動で行われ、1プロセス内でのライブ切替は発生しないため、実運用上は問題にならない。
+
+### 実施内容・結果
+1. `direct`モード: `TactileButton(pin=17).update()`を3回呼び出し、`(False, 0.0, 0.0)`（未接続・未押下として安定）を確認
+2. `pi4gpio`モード（`PI4GPIO_SOCKET_PATH`で開発用ソケットパスを指定）: 同様に3回呼び出し、動作を確認。単独での安定性は50回連続読み取りで別途確認
+3. 本番サービスのPID・GPIO6/26の状態（`bias=pull-up consumer="lg"`）に最後まで変化なし
+4. テスト用に転送した`rpi-sensor-lib-test`ディレクトリ・一時ファイルを全て削除
+
+これで`MIGRATION_PLAN.md`のセンサー移行順序1番目（`tactile_button.py`）の二重モード化が完了した。次は2番目の`bme280_pressure.py`。
