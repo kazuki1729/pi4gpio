@@ -56,3 +56,25 @@
 
 ### 結果
 ロック機構・クライアント識別（`SO_PEERCRED`）・ワイヤープロトコルの一連の流れが実機で end-to-end に動作することを確認した。ハードウェア操作自体（GPIO/I2C/SPI/UARTの実レジスタ操作）は`pi4gpio-hw`が未実装のため、全リクエストは`not_implemented`を返す。次はTier 1（`FEATURE_PRIORITY.md`）の実装に進む。
+
+## 2026-07-12: GPIO実装（Tier 1）の実機検証
+
+### 事前確認（作業前）
+本番サービスのPID・保持デバイスに変化なしを確認。加えて今回は物理レジスタへの直接書き込みを伴うため、`gpioinfo`で本番使用ピン（GPIO6=ボタン、GPIO26=DHT22）・固定機能ピン（I2C: 2,3／SPI0: 7,8,9,10,11／UART: 14,15／1-Wireオーバーレイ: 4）を洗い出し、いずれとも重複しない**GPIO17**（consumer無しの未使用ピン）をテスト対象に選定した。
+
+### 実施内容
+- `pi4gpio-hw/gpio.rs`: `/dev/gpiomem`をmmapし、GPFSEL/GPSET/GPCLR/GPLEV/GPIO_PUP_PDN_CNTRL_REGnへの実レジスタアクセスを実装（`/dev/mem`ではなく`/dev/gpiomem`を選択——GPIOレジスタのページのみに露出範囲が限定され、`gpio`グループ権限でroot不要かつ他の物理アドレスへの誤アクセスリスクが無いため）
+- `socket.rs`: `BusRef::Gpio`のディスパッチを実配線（I2C/SPI/UARTは引き続き`not_implemented`）
+- `examples/gpio_smoke_test.rs`（新規）: 実機でのみ実行可能な検証用サンプル。プルアップ/ダウン・出力→読み戻しループバックを検証
+
+### 実機での発見: PullMode符号の誤り
+GPIO17でスタンドアロンサンプルを実行したところ、プルアップ/ダウンの結果が**きれいに入れ替わって**いた（`claim_input(Up)`→Low、`claim_input(Down)`→High）。出力ループバック側は正常だったため、ノイズではなくコード側の符号誤りと判断。BCM2711の`GPIO_PUP_PDN_CNTRL_REGn`は`0b01=プルダウン・0b10=プルアップ`だが、旧世代BCM2835の`GPPUD`のビット意味と混同し逆に実装していたことが判明。`PullMode`の数値を修正して再実行し、4項目すべて成功を確認した。
+
+### 実施内容（修正後の最終確認）
+1. スタンドアロンサンプル（`gpio_smoke_test 17`）: pull-up→High、pull-down→Low、output-high loopback→High、output-low loopback→Low、すべて成功
+2. デーモン経由（`socat`+JSON）: `write(true)`→`{"ok":true,"value":true}`、`write(false)`→`{"ok":true,"value":false}`、範囲外ピン（9999）→`{"ok":false,"error":"hw_error:invalid pin or channel number: 9999"}`で適切に拒否
+3. 本番サービスのPID・保持デバイス・GPIO6/26の状態（`bias=pull-up consumer="lg"`）に変化がないことを再確認
+4. GPIO17をプルなし入力に後始末、一時ファイル・ソケット・プロセスを全て削除
+
+### 結果
+Tier 1のGPIO基本読み書きが実機で正しく動作することを確認した。**実機テストを行わなければプルアップ/ダウンが逆の実装のまま出荷していた**——このプロジェクトの検証方針（MIGRATION_PLAN.md §10、実機でしか検証できない）の妥当性を裏付ける結果となった。次はI2C（`bme280_pressure.py`相当）に進む。
