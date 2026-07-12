@@ -56,11 +56,11 @@
 
 ## 4. 未決定事項・次に詰めるべきこと
 
-1. 機能の優先順位付け（波形生成・スクリプトエンジン等、何を初期スコープから外すか）
-2. 実装言語（C / Rust / Go / ハイブリッド構成）
-3. ネットワーク越し制御の要否と、要る場合の認証方式
+1. ~~機能の優先順位付け~~ → 決定。`FEATURE_PRIORITY.md`参照（`rpi-sensor-lib`の実依存に基づきTier分け）
+2. ~~実装言語~~ → **Rust**に決定。層B（ソケットサーバ・ロック機構等）の並行処理バグをコンパイル時に防げる点、層A（DMAレジスタ直叩き）を`unsafe`ブロックとして局所化できる点を重視
+3. ~~ネットワーク越し制御の要否と、要る場合の認証方式~~ → 決定。`NETWORK_POLICY.md`参照（リモート制御を許可、Tailscale限定bind＋APIキー、mTLSは見送り、配布は「自分専用ソフトとして」各利用者が自己完結）
 4. `rpi-sensor-lib`移行の具体的な段取り（並行稼働期間・切り戻し手順）
-5. リポジトリの新規作成（`rpi-sensor-lib`・`rpi-hw-lock`と同じ構成: `pyproject.toml`相当のビルド設定、GitHub Actions CI、将来的にTrusted Publishing）
+5. リポジトリの新規作成 → 完了。`https://github.com/kazuki1729/pi4gpio`（`main`ブランチ、`SESSION_HANDOFF.md`・`FEATURE_PRIORITY.md`・`NETWORK_POLICY.md`をpush済み）。ビルド設定・GitHub Actions CI・Trusted Publishingは未着手
 
 ## 5. 関連ファイル・参照
 
