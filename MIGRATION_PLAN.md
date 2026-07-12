@@ -29,8 +29,8 @@ pi4gpioが完成すれば、アドホックスクリプトは`rpi-hw-lock`で本
 
 ## 3. 移行の前提条件（Phase 0）
 
-- pi4gpioのTier 1機能（`FEATURE_PRIORITY.md`：I2C・SPI・GPIO基本読み書き・UART）が実装され、実機（Pi 4、`kazuki1729.local`）で動作確認済みであること
-- pi4gpioがsystemdサービスとして安定起動・自動再起動する状態になっていること
+- ✅ pi4gpioのTier 1機能（`FEATURE_PRIORITY.md`：I2C・SPI・GPIO基本読み書き・UART）が実装され、実機（Pi 4、`kazuki1729.local`）で動作確認済み（2026-07-12、`VERIFICATION_LOG.md`参照）
+- pi4gpioがsystemdサービスとして安定起動・自動再起動する状態になっていること — 未着手。現状は手動起動での検証のみ（`VERIFICATION_LOG.md`）で、`systemd/pi4gpio.service`ユニット自体はリポジトリに存在するが実運用での自動起動確認はまだ
 - この段階ではリモート通信は不要（`sensor-tiered-client.service`もアドホックスクリプトも同一Pi上で動くため、`NETWORK_POLICY.md`のTailscale/APIキーはローカルソケット運用の範囲では関与しない）
 
 ## 4. `rpi-sensor-lib`側の対応：二重モード化

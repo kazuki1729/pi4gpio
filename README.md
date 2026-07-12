@@ -12,7 +12,9 @@ Raspberry Pi 4（BCM2711）向けの、pigpio後継となるGPIO/SPI/I2C/UART共
 
 ## 現在の状態
 
-Rust雛形を実機（`kazuki1729.local`）で初回起動確認済み（`VERIFICATION_LOG.md`参照）。`crates/pi4gpio-hw`のGPIO/I2C/SPI/UARTはスタブ（`todo!()`）のみで、実際のレジスタ操作は未実装。
+`FEATURE_PRIORITY.md`のTier 1（GPIO・I2C・SPI・UART基本読み書き）とTier 2（GPIOエッジ検出/通知）を実装し、実機（`kazuki1729.local`）で検証済み（`VERIFICATION_LOG.md`参照）。実機テストでGPIOのプルアップ/ダウン符号バグ・UARTの無期限ブロックバグの2件を発見・修正済み。
+
+次のステップはPythonクライアントライブラリの実装（`rpi-sensor-lib`の二重モード化の前提、`MIGRATION_PLAN.md`参照）。
 
 ## 構成
 
