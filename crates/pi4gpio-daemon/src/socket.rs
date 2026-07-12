@@ -6,10 +6,11 @@
 use crate::client::ClientId;
 use crate::config::Config;
 use crate::lock::{BusId, LockTable};
-use crate::protocol::{Operation, Request, Response};
+use crate::protocol::{BusRef, Operation, Request, Response};
+use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
 use std::collections::HashSet;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
@@ -24,6 +25,9 @@ pub async fn serve(config: &Config) -> io::Result<()> {
     println!("pi4gpiod: listening on {}", config.socket_path);
 
     let locks = Arc::new(LockTable::new());
+    let gpio = Arc::new(Mutex::new(
+        GpioChip::open().map_err(|e| io::Error::other(e.to_string()))?,
+    ));
     let mut sigterm = signal(SignalKind::terminate())?;
 
     loop {
@@ -31,8 +35,9 @@ pub async fn serve(config: &Config) -> io::Result<()> {
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
                 let locks = Arc::clone(&locks);
+                let gpio = Arc::clone(&gpio);
                 tokio::spawn(async move {
-                    if let Err(err) = handle_client(stream, locks).await {
+                    if let Err(err) = handle_client(stream, locks, gpio).await {
                         eprintln!("pi4gpiod: client session ended with error: {err}");
                     }
                 });
@@ -52,7 +57,11 @@ pub async fn serve(config: &Config) -> io::Result<()> {
     Ok(())
 }
 
-async fn handle_client(stream: UnixStream, locks: Arc<LockTable>) -> io::Result<()> {
+async fn handle_client(
+    stream: UnixStream,
+    locks: Arc<LockTable>,
+    gpio: Arc<Mutex<GpioChip>>,
+) -> io::Result<()> {
     let client_id = ClientId::from_unix_stream(&stream)?;
     println!("pi4gpiod: client connected ({client_id:?})");
 
@@ -66,7 +75,7 @@ async fn handle_client(stream: UnixStream, locks: Arc<LockTable>) -> io::Result<
         }
 
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(&request, &client_id, &locks, &mut held_buses),
+            Ok(request) => dispatch(&request, &client_id, &locks, &mut held_buses, &gpio),
             Err(err) => Response::malformed(&err.to_string()),
         };
 
@@ -88,6 +97,7 @@ fn dispatch(
     client_id: &ClientId,
     locks: &LockTable,
     held_buses: &mut HashSet<BusId>,
+    gpio: &Mutex<GpioChip>,
 ) -> Response {
     let bus: BusId = (&request.bus).into();
 
@@ -106,6 +116,33 @@ fn dispatch(
         }
     }
 
-    // TODO: pi4gpio-hw経由の実操作。Tier 1が実装されるまではnot_implementedを返す。
-    Response::not_implemented()
+    match &request.bus {
+        BusRef::Gpio { pin } => handle_gpio(*pin, &request.op, gpio),
+        // I2C/SPI/UARTはpi4gpio-hw側が未実装のため引き続きnot_implemented。
+        BusRef::I2c { .. } | BusRef::Spi { .. } | BusRef::Uart { .. } => {
+            Response::not_implemented()
+        }
+    }
+}
+
+fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
+    let mut chip = gpio.lock().expect("gpio mutex poisoned");
+    let result = match op {
+        Operation::Read => chip
+            .claim_input(pin, PullMode::None)
+            .and_then(|()| chip.read(pin))
+            .map(|level| level == Level::High),
+        Operation::Write { value } => {
+            let level = if *value { Level::High } else { Level::Low };
+            chip.claim_output(pin)
+                .and_then(|()| chip.write(pin, level))
+                .map(|()| *value)
+        }
+        Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
+    };
+
+    match result {
+        Ok(value) => Response::value(value),
+        Err(err) => Response::hw_error(&err.to_string()),
+    }
 }

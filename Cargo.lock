@@ -62,6 +62,7 @@ dependencies = [
 name = "pi4gpio-hw"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "thiserror",
 ]
 

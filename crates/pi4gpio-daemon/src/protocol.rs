@@ -42,7 +42,7 @@ impl From<&BusRef> for BusId {
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
     Read,
-    Write,
+    Write { value: bool },
     Release,
 }
 
@@ -51,6 +51,9 @@ pub struct Response {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// GPIO読み取りの結果（High=true）等、値を伴う成功レスポンス用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<bool>,
 }
 
 impl Response {
@@ -58,6 +61,15 @@ impl Response {
         Self {
             ok: true,
             error: None,
+            value: None,
+        }
+    }
+
+    pub fn value(value: bool) -> Self {
+        Self {
+            ok: true,
+            error: None,
+            value: Some(value),
         }
     }
 
@@ -65,6 +77,7 @@ impl Response {
         Self {
             ok: false,
             error: Some("not_implemented".to_string()),
+            value: None,
         }
     }
 
@@ -72,6 +85,7 @@ impl Response {
         Self {
             ok: false,
             error: Some(format!("locked_by:{holder}")),
+            value: None,
         }
     }
 
@@ -79,6 +93,15 @@ impl Response {
         Self {
             ok: false,
             error: Some(format!("malformed_request:{msg}")),
+            value: None,
+        }
+    }
+
+    pub fn hw_error(msg: &str) -> Self {
+        Self {
+            ok: false,
+            error: Some(format!("hw_error:{msg}")),
+            value: None,
         }
     }
 }
