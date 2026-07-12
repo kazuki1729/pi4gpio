@@ -4,11 +4,11 @@
 //! 最適化は、Tier 1操作が実装されパフォーマンス要件が明確になってから検討する
 //! （現段階ではPythonクライアント側での可読性・実装のしやすさを優先）。
 //!
-//! `Operation`はGPIO用（`Read`/`Write`、1ビット単位）、I2C用
-//! （`ReadBytes`/`WriteBytes`/`WriteReadBytes`、方向が別々のバイト列）、
-//! SPI用（`Transfer`、送信と同時に同じ長さを受信する全二重転送）に分かれる。
-//! バスの種類に合わない操作が来た場合は`socket.rs`の`dispatch`が
-//! `malformed`で拒否する。
+//! `Operation`はGPIO用（`Read`/`Write`、1ビット単位）、I2C/UART用
+//! （`ReadBytes`/`WriteBytes`、方向が別々のバイト列。I2Cはさらに結合
+//! トランザクション`WriteReadBytes`を持つ）、SPI用（`Transfer`、送信と
+//! 同時に同じ長さを受信する全二重転送）に分かれる。バスの種類に合わない
+//! 操作が来た場合は`socket.rs`の`dispatch`が`malformed`で拒否する。
 //!
 //! いずれの操作もバスを暗黙に確保する（未確保なら`LockTable::try_acquire`）。
 //! I2Cはバス単位でロックする（`addr`単位ではない）——同じバス上の別デバイス
@@ -28,10 +28,24 @@ pub struct Request {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BusRef {
-    Gpio { pin: u32 },
-    I2c { bus: u8, addr: u8 },
-    Spi { bus: u8, chip_select: u8 },
-    Uart { port: u8 },
+    Gpio {
+        pin: u32,
+    },
+    I2c {
+        bus: u8,
+        addr: u8,
+    },
+    Spi {
+        bus: u8,
+        chip_select: u8,
+    },
+    /// `port`は`/dev/ttyS{port}`に対応する（daemon側の命名規約、
+    /// `socket.rs`参照）。`baud_rate`はそのポートの初回オープン時のみ有効
+    /// （I2C/SPIと同じく、以降は既に開いた接続を使い回す）。
+    Uart {
+        port: u8,
+        baud_rate: u32,
+    },
 }
 
 impl From<&BusRef> for BusId {
@@ -42,7 +56,7 @@ impl From<&BusRef> for BusId {
             // トランザクション途中の割り込みから守るため、バス全体を排他する。
             BusRef::I2c { bus, .. } => BusId::I2c(bus),
             BusRef::Spi { bus, chip_select } => BusId::Spi(bus, chip_select),
-            BusRef::Uart { port } => BusId::Uart(port),
+            BusRef::Uart { port, .. } => BusId::Uart(port),
         }
     }
 }
@@ -100,15 +114,6 @@ impl Response {
             error: None,
             value: None,
             bytes: Some(data),
-        }
-    }
-
-    pub fn not_implemented() -> Self {
-        Self {
-            ok: false,
-            error: Some("not_implemented".to_string()),
-            value: None,
-            bytes: None,
         }
     }
 

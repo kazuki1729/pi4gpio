@@ -10,6 +10,7 @@ use crate::protocol::{BusRef, Operation, Request, Response};
 use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
 use pi4gpio_hw::i2c::I2cBus;
 use pi4gpio_hw::spi::SpiDevice;
+use pi4gpio_hw::uart::UartPort;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -24,6 +25,19 @@ use tokio::signal::unix::{signal, SignalKind};
 type I2cBuses = HashMap<u8, I2cBus>;
 /// SPIも同様に`(bus, chip_select)`ごとに初回アクセス時に開く。
 type SpiDevices = HashMap<(u8, u8), SpiDevice>;
+/// UARTも同様に`port`番号ごとに初回アクセス時に開く。`port`は
+/// `/dev/ttyS{port}`に対応する（daemon側の命名規約）。
+type UartPorts = HashMap<u8, UartPort>;
+
+/// 各バス種別のハードウェア状態をまとめて保持する。ハンドラ関数の引数が
+/// バス種別の数だけ増え続けるのを避けるための1つの塊として扱う。
+struct Peripherals {
+    locks: LockTable,
+    gpio: Mutex<GpioChip>,
+    i2c: Mutex<I2cBuses>,
+    spi: Mutex<SpiDevices>,
+    uart: Mutex<UartPorts>,
+}
 
 pub async fn serve(config: &Config) -> io::Result<()> {
     if let Some(parent) = std::path::Path::new(&config.socket_path).parent() {
@@ -34,24 +48,22 @@ pub async fn serve(config: &Config) -> io::Result<()> {
     let listener = UnixListener::bind(&config.socket_path)?;
     println!("pi4gpiod: listening on {}", config.socket_path);
 
-    let locks = Arc::new(LockTable::new());
-    let gpio = Arc::new(Mutex::new(
-        GpioChip::open().map_err(|e| io::Error::other(e.to_string()))?,
-    ));
-    let i2c: Arc<Mutex<I2cBuses>> = Arc::new(Mutex::new(HashMap::new()));
-    let spi: Arc<Mutex<SpiDevices>> = Arc::new(Mutex::new(HashMap::new()));
+    let peripherals = Arc::new(Peripherals {
+        locks: LockTable::new(),
+        gpio: Mutex::new(GpioChip::open().map_err(|e| io::Error::other(e.to_string()))?),
+        i2c: Mutex::new(HashMap::new()),
+        spi: Mutex::new(HashMap::new()),
+        uart: Mutex::new(HashMap::new()),
+    });
     let mut sigterm = signal(SignalKind::terminate())?;
 
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
-                let locks = Arc::clone(&locks);
-                let gpio = Arc::clone(&gpio);
-                let i2c = Arc::clone(&i2c);
-                let spi = Arc::clone(&spi);
+                let peripherals = Arc::clone(&peripherals);
                 tokio::spawn(async move {
-                    if let Err(err) = handle_client(stream, locks, gpio, i2c, spi).await {
+                    if let Err(err) = handle_client(stream, peripherals).await {
                         eprintln!("pi4gpiod: client session ended with error: {err}");
                     }
                 });
@@ -71,13 +83,7 @@ pub async fn serve(config: &Config) -> io::Result<()> {
     Ok(())
 }
 
-async fn handle_client(
-    stream: UnixStream,
-    locks: Arc<LockTable>,
-    gpio: Arc<Mutex<GpioChip>>,
-    i2c: Arc<Mutex<I2cBuses>>,
-    spi: Arc<Mutex<SpiDevices>>,
-) -> io::Result<()> {
+async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io::Result<()> {
     let client_id = ClientId::from_unix_stream(&stream)?;
     println!("pi4gpiod: client connected ({client_id:?})");
 
@@ -91,15 +97,7 @@ async fn handle_client(
         }
 
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(
-                &request,
-                &client_id,
-                &locks,
-                &mut held_buses,
-                &gpio,
-                &i2c,
-                &spi,
-            ),
+            Ok(request) => dispatch(&request, &client_id, &peripherals, &mut held_buses),
             Err(err) => Response::malformed(&err.to_string()),
         };
 
@@ -110,7 +108,7 @@ async fn handle_client(
     }
 
     for bus in held_buses.drain() {
-        locks.release(bus, &client_id);
+        peripherals.locks.release(bus, &client_id);
     }
     println!("pi4gpiod: client disconnected ({client_id:?})");
     Ok(())
@@ -119,22 +117,19 @@ async fn handle_client(
 fn dispatch(
     request: &Request,
     client_id: &ClientId,
-    locks: &LockTable,
+    peripherals: &Peripherals,
     held_buses: &mut HashSet<BusId>,
-    gpio: &Mutex<GpioChip>,
-    i2c: &Mutex<I2cBuses>,
-    spi: &Mutex<SpiDevices>,
 ) -> Response {
     let bus: BusId = (&request.bus).into();
 
     if matches!(request.op, Operation::Release) {
-        locks.release(bus, client_id);
+        peripherals.locks.release(bus, client_id);
         held_buses.remove(&bus);
         return Response::ok();
     }
 
     if !held_buses.contains(&bus) {
-        match locks.try_acquire(bus, client_id.clone()) {
+        match peripherals.locks.try_acquire(bus, client_id.clone()) {
             Ok(()) => {
                 held_buses.insert(bus);
             }
@@ -143,11 +138,14 @@ fn dispatch(
     }
 
     match &request.bus {
-        BusRef::Gpio { pin } => handle_gpio(*pin, &request.op, gpio),
-        BusRef::I2c { bus, addr } => handle_i2c(*bus, *addr, &request.op, i2c),
-        BusRef::Spi { bus, chip_select } => handle_spi(*bus, *chip_select, &request.op, spi),
-        // UARTはpi4gpio-hw側が未実装のため引き続きnot_implemented。
-        BusRef::Uart { .. } => Response::not_implemented(),
+        BusRef::Gpio { pin } => handle_gpio(*pin, &request.op, &peripherals.gpio),
+        BusRef::I2c { bus, addr } => handle_i2c(*bus, *addr, &request.op, &peripherals.i2c),
+        BusRef::Spi { bus, chip_select } => {
+            handle_spi(*bus, *chip_select, &request.op, &peripherals.spi)
+        }
+        BusRef::Uart { port, baud_rate } => {
+            handle_uart(*port, *baud_rate, &request.op, &peripherals.uart)
+        }
     }
 }
 
@@ -240,6 +238,37 @@ fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevic
         | Operation::WriteReadBytes { .. } => {
             Response::malformed("spiバスにはこの操作は使えません")
         }
+        Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
+    }
+}
+
+fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>) -> Response {
+    let mut ports = uart.lock().expect("uart mutex poisoned");
+    let device_path = format!("/dev/ttyS{port}");
+    let opened = match ports.entry(port) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => match UartPort::open(&device_path, baud_rate) {
+            Ok(opened) => entry.insert(opened),
+            Err(err) => return Response::hw_error(&err.to_string()),
+        },
+    };
+
+    match op {
+        Operation::ReadBytes { length } => {
+            let mut buf = vec![0u8; *length];
+            match opened.read(&mut buf) {
+                Ok(n) => Response::bytes(buf[..n].to_vec()),
+                Err(err) => Response::hw_error(&err.to_string()),
+            }
+        }
+        Operation::WriteBytes { data } => match opened.write(data) {
+            Ok(_) => Response::ok(),
+            Err(err) => Response::hw_error(&err.to_string()),
+        },
+        Operation::Read
+        | Operation::Write { .. }
+        | Operation::WriteReadBytes { .. }
+        | Operation::Transfer { .. } => Response::malformed("uartバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
