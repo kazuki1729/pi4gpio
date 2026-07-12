@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod gpio;
+pub mod gpio_watch;
 pub mod i2c;
 pub mod spi;
 pub mod uart;

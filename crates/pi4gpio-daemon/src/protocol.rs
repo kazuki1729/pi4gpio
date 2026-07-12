@@ -66,13 +66,32 @@ impl From<&BusRef> for BusId {
 pub enum Operation {
     // GPIO用: 1ビット単位。
     Read,
-    Write { value: bool },
+    Write {
+        value: bool,
+    },
     // I2C用: 方向が別々のバイト列（将来UARTでも流用予定）。
-    ReadBytes { length: usize },
-    WriteBytes { data: Vec<u8> },
-    WriteReadBytes { data: Vec<u8>, length: usize },
+    ReadBytes {
+        length: usize,
+    },
+    WriteBytes {
+        data: Vec<u8>,
+    },
+    WriteReadBytes {
+        data: Vec<u8>,
+        length: usize,
+    },
     // SPI用: 送信と同時に同じ長さを受信する全二重転送。
-    Transfer { data: Vec<u8> },
+    Transfer {
+        data: Vec<u8>,
+    },
+    // GPIO用（Tier 2）: エッジをタイムスタンプ付きで記録する。
+    // `pre_pulse_low_ms`を指定すると、監視開始前にそのピンをLOWに駆動して
+    // から`Some(ms)`ミリ秒待つ（DHT22等のスタート信号パターン）。
+    WatchEdges {
+        pre_pulse_low_ms: Option<u64>,
+        max_events: usize,
+        timeout_ms: u64,
+    },
     Release,
 }
 
@@ -87,6 +106,15 @@ pub struct Response {
     /// I2C読み取りの結果等、バイト列を伴う成功レスポンス用。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<Vec<u8>>,
+    /// `WatchEdges`の結果。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<EdgeEventWire>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EdgeEventWire {
+    pub timestamp_ns: u64,
+    pub rising: bool,
 }
 
 impl Response {
@@ -96,6 +124,7 @@ impl Response {
             error: None,
             value: None,
             bytes: None,
+            edges: None,
         }
     }
 
@@ -105,6 +134,7 @@ impl Response {
             error: None,
             value: Some(value),
             bytes: None,
+            edges: None,
         }
     }
 
@@ -114,6 +144,17 @@ impl Response {
             error: None,
             value: None,
             bytes: Some(data),
+            edges: None,
+        }
+    }
+
+    pub fn edges(events: Vec<EdgeEventWire>) -> Self {
+        Self {
+            ok: true,
+            error: None,
+            value: None,
+            bytes: None,
+            edges: Some(events),
         }
     }
 
@@ -123,6 +164,7 @@ impl Response {
             error: Some(format!("locked_by:{holder}")),
             value: None,
             bytes: None,
+            edges: None,
         }
     }
 
@@ -132,6 +174,7 @@ impl Response {
             error: Some(format!("malformed_request:{msg}")),
             value: None,
             bytes: None,
+            edges: None,
         }
     }
 
@@ -141,6 +184,7 @@ impl Response {
             error: Some(format!("hw_error:{msg}")),
             value: None,
             bytes: None,
+            edges: None,
         }
     }
 }

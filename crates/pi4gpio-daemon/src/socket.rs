@@ -6,8 +6,9 @@
 use crate::client::ClientId;
 use crate::config::Config;
 use crate::lock::{BusId, LockTable};
-use crate::protocol::{BusRef, Operation, Request, Response};
+use crate::protocol::{BusRef, EdgeEventWire, Operation, Request, Response};
 use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
+use pi4gpio_hw::gpio_watch::EdgeWatcher;
 use pi4gpio_hw::i2c::I2cBus;
 use pi4gpio_hw::spi::SpiDevice;
 use pi4gpio_hw::uart::UartPort;
@@ -15,9 +16,12 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
+
+const GPIOCHIP_PATH: &str = "/dev/gpiochip0";
 
 /// I2Cバスはリクエストで指定された`bus`番号ごとに初回アクセス時に開く
 /// （`/dev/i2c-0`と`/dev/i2c-1`の両方が存在しうるため、GPIOのようにプロセス
@@ -97,7 +101,23 @@ async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io:
         }
 
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(&request, &client_id, &peripherals, &mut held_buses),
+            Ok(request) => {
+                // Tier 2のWatchEdgesは最大で数十ミリ秒ブロックしうる
+                // （Tier 1の各操作はマイクロ秒オーダーで無視できる差だが、
+                // これは無視できない）。tokioのワーカースレッドを塞がない
+                // よう、実際のディスパッチはブロッキングスレッドプールで行う。
+                let peripherals = Arc::clone(&peripherals);
+                let client_id = client_id.clone();
+                let mut held = std::mem::take(&mut held_buses);
+                let (response, held) = tokio::task::spawn_blocking(move || {
+                    let response = dispatch(&request, &client_id, &peripherals, &mut held);
+                    (response, held)
+                })
+                .await
+                .expect("dispatch task panicked");
+                held_buses = held;
+                response
+            }
             Err(err) => Response::malformed(&err.to_string()),
         };
 
@@ -150,29 +170,79 @@ fn dispatch(
 }
 
 fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
-    let mut chip = gpio.lock().expect("gpio mutex poisoned");
-    let result = match op {
-        Operation::Read => chip
-            .claim_input(pin, PullMode::None)
-            .and_then(|()| chip.read(pin))
-            .map(|level| level == Level::High),
-        Operation::Write { value } => {
-            let level = if *value { Level::High } else { Level::Low };
-            chip.claim_output(pin)
-                .and_then(|()| chip.write(pin, level))
-                .map(|()| *value)
+    match op {
+        Operation::Read | Operation::Write { .. } => {
+            let mut chip = gpio.lock().expect("gpio mutex poisoned");
+            let result = match op {
+                Operation::Read => chip
+                    .claim_input(pin, PullMode::None)
+                    .and_then(|()| chip.read(pin))
+                    .map(|level| level == Level::High),
+                Operation::Write { value } => {
+                    let level = if *value { Level::High } else { Level::Low };
+                    chip.claim_output(pin)
+                        .and_then(|()| chip.write(pin, level))
+                        .map(|()| *value)
+                }
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(value) => Response::value(value),
+                Err(err) => Response::hw_error(&err.to_string()),
+            }
         }
+        Operation::WatchEdges {
+            pre_pulse_low_ms,
+            max_events,
+            timeout_ms,
+        } => handle_watch_edges(pin, *pre_pulse_low_ms, *max_events, *timeout_ms, gpio),
         Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
         | Operation::WriteReadBytes { .. }
-        | Operation::Transfer { .. } => {
-            return Response::malformed("gpioバスにはバイト列操作は使えません");
-        }
+        | Operation::Transfer { .. } => Response::malformed("gpioバスにはバイト列操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
-    };
+    }
+}
 
-    match result {
-        Ok(value) => Response::value(value),
+/// スタート信号（任意）を送ってからエッジを記録する（Tier 2、DHT22向け）。
+///
+/// `pre_pulse_low_ms`が指定されていれば、`/dev/gpiomem`経由（Tier 1、
+/// `gpio.rs`）でピンをLOW出力にしてから待ち、その後`/dev/gpiochip0`経由
+/// （Tier 2、`gpio_watch.rs`）に切り替えてエッジ監視を開始する。両者は
+/// カーネルのピン使用状況把握という点で別経路のため、この切り替え自体は
+/// カーネル側の衝突検知（EBUSY）の対象にならない（`gpio_watch.rs`のモジュール
+/// docを参照）。このピンの`LockTable`ロックは呼び出し元がスタート信号から
+/// 監視終了まで保持しているため、他クライアントの割り込みは防がれている。
+fn handle_watch_edges(
+    pin: u32,
+    pre_pulse_low_ms: Option<u64>,
+    max_events: usize,
+    timeout_ms: u64,
+    gpio: &Mutex<GpioChip>,
+) -> Response {
+    if let Some(ms) = pre_pulse_low_ms {
+        let mut chip = gpio.lock().expect("gpio mutex poisoned");
+        let result = chip
+            .claim_output(pin)
+            .and_then(|()| chip.write(pin, Level::Low));
+        drop(chip); // sleep中は他バスのGPIO操作をブロックしない。
+        if let Err(err) = result {
+            return Response::hw_error(&err.to_string());
+        }
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+
+    let watcher = EdgeWatcher::open(GPIOCHIP_PATH, pin);
+    match watcher.and_then(|mut w| w.wait_events(Duration::from_millis(timeout_ms), max_events)) {
+        Ok(events) => Response::edges(
+            events
+                .into_iter()
+                .map(|e| EdgeEventWire {
+                    timestamp_ns: e.timestamp_ns,
+                    rising: e.rising,
+                })
+                .collect(),
+        ),
         Err(err) => Response::hw_error(&err.to_string()),
     }
 }
@@ -206,9 +276,10 @@ fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> R
                 Err(err) => Response::hw_error(&err.to_string()),
             }
         }
-        Operation::Read | Operation::Write { .. } | Operation::Transfer { .. } => {
-            Response::malformed("i2cバスにはこの操作は使えません")
-        }
+        Operation::Read
+        | Operation::Write { .. }
+        | Operation::Transfer { .. }
+        | Operation::WatchEdges { .. } => Response::malformed("i2cバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -235,9 +306,8 @@ fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevic
         | Operation::Write { .. }
         | Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
-        | Operation::WriteReadBytes { .. } => {
-            Response::malformed("spiバスにはこの操作は使えません")
-        }
+        | Operation::WriteReadBytes { .. }
+        | Operation::WatchEdges { .. } => Response::malformed("spiバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -268,7 +338,8 @@ fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>
         Operation::Read
         | Operation::Write { .. }
         | Operation::WriteReadBytes { .. }
-        | Operation::Transfer { .. } => Response::malformed("uartバスにはこの操作は使えません"),
+        | Operation::Transfer { .. }
+        | Operation::WatchEdges { .. } => Response::malformed("uartバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
