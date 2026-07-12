@@ -11,6 +11,9 @@ use crate::client::ClientId;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+// socket.rsの接続受付ループがまだLockTableを配線していないため未使用。
+// TODO: 配線が終わったらこの#[allow(dead_code)]は外す。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BusId {
     Gpio(u32),
@@ -19,11 +22,13 @@ pub enum BusId {
     Uart(u8),
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct LockTable {
     holders: Mutex<HashMap<BusId, ClientId>>,
 }
 
+#[allow(dead_code)]
 impl LockTable {
     pub fn new() -> Self {
         Self::default()
