@@ -1,13 +1,13 @@
 # セッション引き継ぎメモ（pi4gpioプロジェクト）
 
-`pi4gpio`は現時点で**構想・設計検討段階**であり、リポジトリもコードもまだ存在しない。本ファイルは、このプロジェクトの議論だけを別セッションに引き継ぐための独立メモ（week09全体の引き継ぎとは別スコープ）。作業日: 2026-07-12。
+`pi4gpio`は設計フェーズを終え、Rustワークスペースの雛形（`crates/pi4gpio-daemon`・`crates/pi4gpio-hw`）を作成した段階。ハードウェアレジスタ操作などの実装本体はまだ未着手。本ファイルは、このプロジェクトの議論だけを別セッションに引き継ぐための独立メモ（week09全体の引き継ぎとは別スコープ）。作業日: 2026-07-12。
 
 ## 1. プロジェクトの位置づけ
 
 - **名称**: `pi4gpio`（決定済み）。pigpio・lgpioの命名系譜に連なる形で、かつ「Raspberry Pi 4専用」であることを名前自体に刻んだ
 - **目的**: Raspberry Pi 4向けに、pigpioの機能を引き継ぐ独自のGPIO/SPI/I2C/UART共有アクセス・デーモンを自作する
 - **`rpi-hw-lock`との関係**: `rpi-hw-lock`（PyPI公開済み・Trusted Publishing化済み、`C:\Users\Kazuki\rpi-hw-lock\`）は、**`pi4gpio`が完成した時点で退役予定**。それ以外のpigpioの機能は`pi4gpio`が引き継ぐ
-- **`rpi-sensor-lib`との関係**: 現在`spidev`/`smbus2`/`RPi.bme280`/`lgpio`を直接叩いている`rpi-sensor-lib`（`C:\Users\Kazuki\github-ripo\`）は、将来`pi4gpio`デーモンに喋りに行くクライアントへ全面書き換えが必要になる見込み（未着手）
+- **`rpi-sensor-lib`との関係**: 現在`spidev`/`smbus2`/`RPi.bme280`/`lgpio`を直接叩いている`rpi-sensor-lib`（`C:\Users\Kazuki\github-ripo\`）は、将来`pi4gpio`デーモンに喋りに行くクライアントへ全面書き換えが必要。移行計画は`MIGRATION_PLAN.md`で決定済み、実装（`rpi-sensor-lib`側の二重モード化）は未着手
 
 ## 2. なぜpigpioをそのまま使わないか
 
@@ -60,7 +60,7 @@
 2. ~~実装言語~~ → **Rust**に決定。層B（ソケットサーバ・ロック機構等）の並行処理バグをコンパイル時に防げる点、層A（DMAレジスタ直叩き）を`unsafe`ブロックとして局所化できる点を重視
 3. ~~ネットワーク越し制御の要否と、要る場合の認証方式~~ → 決定。`NETWORK_POLICY.md`参照（リモート制御を許可、Tailscale限定bind＋APIキー、mTLSは見送り、配布は「自分専用ソフトとして」各利用者が自己完結）
 4. ~~`rpi-sensor-lib`移行の具体的な段取り~~ → 決定。`MIGRATION_PLAN.md`参照（`rpi-hw-lock`のstop/restart方式との関係整理、二重モード化、センサー単位の段階的移行順序、`rpi-hw-lock`退役条件）
-5. リポジトリの新規作成 → 完了。`https://github.com/kazuki1729/pi4gpio`（`main`ブランチ、`SESSION_HANDOFF.md`・`FEATURE_PRIORITY.md`・`NETWORK_POLICY.md`をpush済み）。ビルド設定・GitHub Actions CI・Trusted Publishingは未着手
+5. リポジトリの新規作成 → 完了。`https://github.com/kazuki1729/pi4gpio`（`main`ブランチ）。設計ドキュメント（`SESSION_HANDOFF.md`・`FEATURE_PRIORITY.md`・`NETWORK_POLICY.md`・`MIGRATION_PLAN.md`）とRustワークスペース雛形（`crates/pi4gpio-daemon`・`crates/pi4gpio-hw`、GitHub Actions CI、systemdユニット）をpush済み。Trusted Publishingは対象がクライアントライブラリ側（別リポジトリ）になるため、pi4gpio本体では引き続き未着手
 
 ## 5. 関連ファイル・参照
 
