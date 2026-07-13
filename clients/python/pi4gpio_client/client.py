@@ -25,6 +25,10 @@ from typing import Any, BinaryIO, Optional
 
 DEFAULT_SOCKET_PATH = "/run/pi4gpio/pi4gpio.sock"
 
+# daemon側の待ち時間（timeout_ms/budget_ms）に対してソケットタイムアウトを
+# 引き上げる際の安全マージン。ネットワーク・プロセス間のオーバーヘッド分。
+_RESPONSE_TIMEOUT_MARGIN_SEC = 2.0
+
 
 class Pi4gpioError(Exception):
     """pi4gpiodがエラーレスポンス（``ok: false``）を返した場合に送出する。"""
@@ -84,11 +88,20 @@ class Pi4gpioClient:
         bus: dict[str, Any],
         op_name: str,
         op_args: Optional[dict[str, Any]] = None,
+        min_response_timeout: Optional[float] = None,
     ) -> dict[str, Any]:
         """`op_name`は`Operation`のバリアント名（snake_case）、`op_args`は
         そのバリアントが持つフィールド。`op_args`が`None`なら
         データを持たないバリアント（`Read`/`Release`）として裸の文字列で
         送る。
+
+        `min_response_timeout`: このリクエストの応答を待つ間だけ、ソケット
+        のタイムアウトを最低でもこの秒数まで一時的に引き上げる（応答後は
+        元の値に戻す）。`gpio_watch_edges`/`gpio_watch_edges_polled`のように
+        呼び出し側がdaemon側の待ち時間（`timeout_ms`/`budget_ms`）を独自に
+        指定できる操作では、それがクライアント自身のソケットタイムアウト
+        （デフォルト5秒）を超えると、daemonが応答するより先にクライアント
+        側がタイムアウトしてしまうことがある（実機検証で発見）。
         """
         if self._sock is None:
             self.connect()
@@ -96,9 +109,22 @@ class Pi4gpioClient:
 
         op: Any = op_name if op_args is None else {op_name: op_args}
         payload = json.dumps({"bus": bus, "op": op}, separators=(",", ":")) + "\n"
-        self._sock.sendall(payload.encode("utf-8"))
 
-        line = self._reader.readline()
+        original_timeout = self._sock.gettimeout()
+        needs_bump = (
+            min_response_timeout is not None
+            and original_timeout is not None
+            and min_response_timeout > original_timeout
+        )
+        if needs_bump:
+            self._sock.settimeout(min_response_timeout)
+        try:
+            self._sock.sendall(payload.encode("utf-8"))
+            line = self._reader.readline()
+        finally:
+            if needs_bump:
+                self._sock.settimeout(original_timeout)
+
         if not line:
             raise Pi4gpioError("pi4gpiodとの接続が切断されました（空の応答）")
         response: dict[str, Any] = json.loads(line)
@@ -147,6 +173,7 @@ class Pi4gpioClient:
                 "timeout_ms": timeout_ms,
                 "pull": pull,
             },
+            min_response_timeout=timeout_ms / 1000 + _RESPONSE_TIMEOUT_MARGIN_SEC,
         )
         edges: list[dict[str, Any]] = response.get("edges") or []
         return edges
@@ -179,6 +206,7 @@ class Pi4gpioClient:
                 "budget_ms": budget_ms,
                 "pull": pull,
             },
+            min_response_timeout=budget_ms / 1000 + _RESPONSE_TIMEOUT_MARGIN_SEC,
         )
         edges: list[dict[str, Any]] = response.get("edges") or []
         return edges
