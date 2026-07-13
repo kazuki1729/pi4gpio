@@ -298,3 +298,38 @@ Tier 2のGPIOエッジ検出/通知が実機で正しく動作することを確
 
 ### 結果
 `MIGRATION_PLAN.md`のセンサー移行順序5番目（最終、`robust_dht22.py`）の二重モード化が完了した。これで全7センサークラスの二重モード化が完了——`rpi-sensor-lib`の全センサーがpi4gpio経由でも利用可能になった。実センサーが物理的に接続されていないため実際の温湿度値での検証はできていないが、既知の合成データによるロジック検証と、実機での通信経路・エラーハンドリングの検証は完了している。
+
+## 2026-07-13: pi4gpiodのsystemdサービス化
+
+### 事前確認（作業前）
+- `pi4gpiod`はそれまで毎回手動起動（フォアグラウンド or `nohup`）で検証していたため、セッション終了・Pi再起動のたびに消えていた。`sensor-tiered-client.service`は稼働中であることを確認
+- `systemd/pi4gpio.service`ユニットファイル自体はリポジトリに存在していたが、実機への配置・`systemctl enable`は未実施だった（`MIGRATION_PLAN.md` §3 Phase 0の残項目）
+
+### 実施内容
+1. `User=pi`（`pi`ユーザーは`gpio`/`i2c`/`spi`/`dialout`全グループ所属済みのため、root権限は不要——最小権限の原則）、`RuntimeDirectory=pi4gpio`（`/run/pi4gpio`をsystemdが自動作成・所有権設定、これまでの`sudo mkdir`手動回避が不要に）、`Restart=on-failure`で構成したユニットファイルを`/etc/systemd/system/pi4gpio.service`に配置
+2. `sudo systemctl daemon-reload && sudo systemctl enable --now pi4gpio.service`
+3. `ps -up <PID>`で実際に`pi`ユーザー権限で起動していることを確認（root起動になっていないか要確認だったため）
+4. `Restart=on-failure`の動作確認: 意図的に`kill -9`でプロセスを強制終了させ、systemdが自動的に再起動することを確認（PID 4396→4440へ変化、`RestartSec=2`の通り約2秒後に復帰）
+5. 本番サービスのPID・保持デバイスに最後まで変化なし
+
+### 結果
+`pi4gpiod`がPi再起動時にも自動起動する永続サービスになった。`MIGRATION_PLAN.md` §3 Phase 0の残項目（「pi4gpioがsystemdサービスとして安定起動・自動再起動する状態」）を満たした。これにより、以降のカナリア検証・アドホックスクリプトはPi再起動を挟んでも都度手動起動し直す必要がなくなる。
+
+## 2026-07-13: カナリア比較スクリプト（`scripts/canary_compare.py`）の準備・構造テスト
+
+### 背景
+`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証の準備として、`direct`/`pi4gpio`両モードの読み取り結果（値・レイテンシ・成功率）をCSVへ記録するスクリプトを新規作成した。実センサーは依然として物理的に未接続のため、実データでの比較検証はまだ行えない——今回の作業は「センサー再接続後すぐ本格稼働できる状態にしておく」準備・構造検証に限定される。
+
+### 設計上の制約整理
+- I2C（BME280）・SPI（MCP3208系4種）はカーネルがバス単位でトランザクションをシリアライズするため、`direct`/`pi4gpio`両方を本番プロセスと並行して独立に読んでも安全（既存のTier 1実機検証で確認済みの前提）
+- GPIO（`tactile_button`、本番ピン6）・UART（`mh_z19c_co2`）・DHT22（`robust_dht22`、本番ピン26）は、本番プロセスが同じピン/デバイスを`lgpio`/`pyserial`経由で既に掴んでいるため、本スクリプトが`direct`モードで独自に読むと競合しうる。これらは`pi4gpio`モードのみ読み、`direct`側の参考値は本番プロセスが`journalctl`に残す「送信準備: {json}」ログから抽出して緩やかに突き合わせる方式にした（厳密な同時比較ではない）
+
+### 実機での構造テスト
+1. 本番venv（`/home/pi/sensor-tiered-store/.venv`、`lgpio`/`spidev`/`smbus2`/`pyserial`/`RPi.bme280`インストール済み）に`rpi-sensor-lib`0.1.0（二重モード化前）が入っており、本番のsite-packagesは使えないことを確認。二重モード対応版の`rpi_sensors`パッケージを`~/rpi-sensor-lib-canary`へ別途配置し、本番環境に一切触れず検証できるようにした
+2. `~/pi4gpio/scripts/canary_compare.py`を転送し、本番venvのPythonインタプリタで`--interval 5 --duration 12`の短時間構造テストを実行
+3. センサー未接続のため全項目が floor値（0や`-1.0`等）・`I/O error`・`DHT22ReadError`のいずれかを返したが、**クラッシュせず**全13項目×2回分がCSVへ正しい形式で記録されることを確認
+4. `bme280_pressure.py`の`read()`は初期化失敗時も例外を送出せず`(None, None, None)`を返す（内部でエラーを握りつぶして`ok=True`のまま返す既存の設計）ことが判明。カナリアCSVの`ok`列だけでは判定不十分で、値が`None`かどうかも見る必要があると分かった——今後の実データ分析時の注意点として記録
+5. 本番サービス（`NRestarts=0`、`ActiveState=active`のまま）・`pi4gpiod`（新規クライアント接続・切断のログのみ、ロックエラー無し）ともに影響が無いことを確認。テスト用一時ファイル・`__pycache__`を削除
+
+### 結果
+`canary_compare.py`は実センサー無しでもクラッシュせず動作し、CSV出力形式・本番無影響を確認できた。実データでの並行稼働検証は、ユーザーによるセンサーの物理的な再接続後に着手する（`MIGRATION_PLAN.md` §5の注記の通り、依然として未達成）。

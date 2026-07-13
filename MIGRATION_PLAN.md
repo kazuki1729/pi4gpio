@@ -30,7 +30,7 @@ pi4gpioが完成すれば、アドホックスクリプトは`rpi-hw-lock`で本
 ## 3. 移行の前提条件（Phase 0）
 
 - ✅ pi4gpioのTier 1機能（`FEATURE_PRIORITY.md`：I2C・SPI・GPIO基本読み書き・UART）が実装され、実機（Pi 4、`kazuki1729.local`）で動作確認済み（2026-07-12、`VERIFICATION_LOG.md`参照）
-- pi4gpioがsystemdサービスとして安定起動・自動再起動する状態になっていること — 未着手。現状は手動起動での検証のみ（`VERIFICATION_LOG.md`）で、`systemd/pi4gpio.service`ユニット自体はリポジトリに存在するが実運用での自動起動確認はまだ
+- ✅ pi4gpioがsystemdサービスとして安定起動・自動再起動する状態になっていること（2026-07-13、`VERIFICATION_LOG.md`参照）。`User=pi`・`RuntimeDirectory=pi4gpio`・`Restart=on-failure`で実機に配置・有効化済み。`kill -9`による強制終了からの自動復帰も確認済み
 - この段階ではリモート通信は不要（`sensor-tiered-client.service`もアドホックスクリプトも同一Pi上で動くため、`NETWORK_POLICY.md`のTailscale/APIキーはローカルソケット運用の範囲では関与しない）
 
 ## 4. `rpi-sensor-lib`側の対応：二重モード化 — ✅ 実装完了（2026-07-13）
@@ -61,6 +61,7 @@ pi4gpioが完成すれば、アドホックスクリプトは`rpi-hw-lock`で本
 - 各センサーの移行時、`direct`モードと`pi4gpio`モードを同じPi上で並行稼働させ、一定期間（目安1〜2週間）値の一致・レイテンシ・エラー率を比較する
 - 特に`robust_dht22.py`は、pi4gpioのGPIO通知機能に切り替えた後の読み取り成功率（現状`max_retries=5`でのリトライ率）が、既存実装より改善しているか（悪化していないか）を定量的に確認する
 - 本番の`sensor-tiered-client.service`は`direct`モードのまま動かし続け、並行稼働は別プロセス（テスト用の一時的なサービスまたはcronジョブ）で行う。本番を止めない
+- ✅ 比較用スクリプト`scripts/canary_compare.py`を準備済み・構造テスト完了（2026-07-13、`VERIFICATION_LOG.md`参照）。I2C/SPI系センサーはdirect/pi4gpio両方を並行読み取りしCSVへ記録、GPIO/UART/DHT22系（本番と競合しうる）はpi4gpioモードのみ読み取り本番の`journalctl`ログと突き合わせる設計。**実センサーが物理的に未接続のため実データでの比較はまだ未着手** — センサー再接続後に本格稼働させる
 
 ## 7. 切り戻し手順
 
