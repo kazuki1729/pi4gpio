@@ -389,7 +389,9 @@ fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> R
         | Operation::Write { .. }
         | Operation::Transfer { .. }
         | Operation::WatchEdges { .. }
-        | Operation::WatchEdgesPolled { .. } => Response::malformed("i2cバスにはこの操作は使えません"),
+        | Operation::WatchEdgesPolled { .. } => {
+            Response::malformed("i2cバスにはこの操作は使えません")
+        }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -418,7 +420,9 @@ fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevic
         | Operation::WriteBytes { .. }
         | Operation::WriteReadBytes { .. }
         | Operation::WatchEdges { .. }
-        | Operation::WatchEdgesPolled { .. } => Response::malformed("spiバスにはこの操作は使えません"),
+        | Operation::WatchEdgesPolled { .. } => {
+            Response::malformed("spiバスにはこの操作は使えません")
+        }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -451,7 +455,9 @@ fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>
         | Operation::WriteReadBytes { .. }
         | Operation::Transfer { .. }
         | Operation::WatchEdges { .. }
-        | Operation::WatchEdgesPolled { .. } => Response::malformed("uartバスにはこの操作は使えません"),
+        | Operation::WatchEdgesPolled { .. } => {
+            Response::malformed("uartバスにはこの操作は使えません")
+        }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
