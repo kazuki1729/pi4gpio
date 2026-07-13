@@ -378,3 +378,19 @@ directモード（lgpioの高速busy-loopポーリング）も完璧ではない
 
 ### 結果
 DHT22の実機データ検証で、`MIGRATION_PLAN.md`が「最重要かつ最高難度」と位置付けていた通りの重大な実運用バグ（pi4gpioモードでのDHT22読み取りが実機では常に失敗する）を発見・修正した。カーネル割り込み（Tier 2）に対する過信が原因——理論上はカーネル空間でのタイムスタンプ打刻によりOSスケジューリングジッタに強いはずだったが、実機では逆に、電圧遷移が緩やかな信号に対するTier 1ポーリング方式の耐性の高さの方が勝った。これで`MIGRATION_PLAN.md`のセンサー移行順序5項目全てが実データで検証済みとなった。実センサー未接続の期間が長く続いたこのプロジェクトで、初めて全センサーの実際の温湿度・照度・音量・CO2濃度等の値が確認できた節目でもある。
+
+## 2026-07-13: カナリア比較のsystemd常駐化・本格運用開始
+
+### 事前確認（作業前）
+- `sensor-tiered-client.service`・`pi4gpio.service`ともに`ActiveState=active`であることを確認
+- `~/pi4gpio/scripts/canary_compare.py`・`~/rpi-sensor-lib-canary/rpi_sensors/`が既に配置済みであることを確認
+
+### 実施内容
+1. `systemd/canary-compare.service`を新規作成（`User=pi`、`Restart=on-failure`、`WorkingDirectory=~/pi4gpio/scripts`、本番venvのPythonで`canary_compare.py --interval 30`を実行）。永続的な自動起動設定に当たるため、実行前にユーザーへ機能説明と承認を求めた
+2. `/etc/systemd/system/canary-compare.service`に配置し`systemctl enable --now`
+3. 起動後35秒で記録開始を確認。CSV初回分の全13項目（I2C/SPI系はdirect/pi4gpio両方、GPIO/UART/DHT22系はpi4gpioのみ+本番journalctl参考値）が正しい形式で出力されていることを確認
+4. DHT22（pi4gpio 25.3℃/64.4% vs 本番参考値25.2℃/63.8%）・MHZ19C CO2（pi4gpio 610ppm vs 本番参考値607ppm）とも、非同時比較ながら妥当な近似値であることを確認
+5. `sensor-tiered-client.service`・`pi4gpio.service`とも`NRestarts=0`・`ActiveState=active`のままで、カナリア起動による影響が無いことを確認
+
+### 結果
+`canary-compare.service`が2026-07-13 12:34 JST頃から常駐稼働を開始した。Pi再起動を挟んでも自動再開するため、`MIGRATION_PLAN.md` §6が求める1〜2週間規模の並行稼働データ収集が実際に始まった。次のステップ（本番の段階的cutover判断）は、この期間のCSVが蓄積されてから行う。
