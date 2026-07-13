@@ -246,3 +246,23 @@ impl EdgeWatcher {
         Ok(events)
     }
 }
+
+/// `CLOCK_MONOTONIC`基準のナノ秒タイムスタンプ。GPIO v2イベントの
+/// `timestamp_ns`（`GPIO_V2_LINE_FLAG_EVENT_CLOCK_REALTIME`を指定しない限り
+/// カーネルは`CLOCK_MONOTONIC`基準で打刻する）と同じ時刻源になるため、
+/// Tier 1の高速ポーリング（`pi4gpio-daemon`の`handle_watch_edges_polled`）
+/// で合成するタイムスタンプも、Tier 2のカーネルタイムスタンプと同じ土俵で
+/// 扱える。デコード側（`_decode_dht22_edges`等）はどちらの経路で得た
+/// エッジ列かを区別する必要が無い。
+pub fn monotonic_now_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts`はこの呼び出しの間有効なスタック上の値。`CLOCK_MONOTONIC`
+    // はLinuxで常にサポートされる。
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+    }
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}

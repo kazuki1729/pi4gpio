@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::lock::{BusId, LockTable};
 use crate::protocol::{BusRef, EdgeEventWire, Operation, PullWire, Request, Response};
 use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
-use pi4gpio_hw::gpio_watch::EdgeWatcher;
+use pi4gpio_hw::gpio_watch::{monotonic_now_ns, EdgeWatcher};
 use pi4gpio_hw::i2c::I2cBus;
 use pi4gpio_hw::spi::SpiDevice;
 use pi4gpio_hw::uart::UartPort;
@@ -16,7 +16,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
@@ -231,6 +231,11 @@ fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
             *pull,
             gpio,
         ),
+        Operation::WatchEdgesPolled {
+            pre_pulse_low_ms,
+            budget_ms,
+            pull,
+        } => handle_watch_edges_polled(pin, *pre_pulse_low_ms, *budget_ms, *pull, gpio),
         Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
         | Operation::WriteReadBytes { .. }
@@ -283,6 +288,74 @@ fn handle_watch_edges(
     }
 }
 
+/// 遷移から次の遷移が観測されないままこの時間が経過したら、通信終了と
+/// みなして打ち切る（DHT22の最大ビット間隔・ACK間隔（約80us）に十分な
+/// 余裕を持たせた値）。`_read_raw_direct`（既存のlgpioポーリング実装）の
+/// `max_unchanged`に相当するが、反復回数ではなく実時間で判定する
+/// （Rustの1反復はlgpio越しのPython呼び出しよりずっと高速で、反復回数を
+/// 基準にすると環境ごとに意味が変わってしまうため）。
+const EDGE_POLL_IDLE_CUTOFF: Duration = Duration::from_micros(300);
+
+/// `WatchEdges`（カーネルのGPIO v2エッジ割り込み）の代替。実機検証で、
+/// DHT22の一部の遷移（電圧の立ち上がり/立ち下がりが緩やかなもの）を
+/// カーネル割り込みが取りこぼすことがあると判明した（2026-07-13、
+/// VERIFICATION_LOG.md）。割り込みに頼らず、`/dev/gpiomem`の生レベルを
+/// 高速busy-loopで連続サンプリングし、レベルが変化した瞬間をエッジとして
+/// 記録する。戻り値の形式（`edges`）は`WatchEdges`と同一。
+fn handle_watch_edges_polled(
+    pin: u32,
+    pre_pulse_low_ms: Option<u64>,
+    budget_ms: u64,
+    pull: PullWire,
+    gpio: &Mutex<GpioChip>,
+) -> Response {
+    let mut chip = gpio.lock().expect("gpio mutex poisoned");
+
+    if let Some(ms) = pre_pulse_low_ms {
+        let result = chip
+            .claim_output(pin)
+            .and_then(|()| chip.write(pin, Level::Low));
+        if let Err(err) = result {
+            return Response::hw_error(&err.to_string());
+        }
+        drop(chip);
+        std::thread::sleep(Duration::from_millis(ms));
+        chip = gpio.lock().expect("gpio mutex poisoned");
+    }
+
+    if let Err(err) = chip.claim_input(pin, pull_mode_from_wire(pull)) {
+        return Response::hw_error(&err.to_string());
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(budget_ms);
+    let mut idle_deadline = Instant::now() + EDGE_POLL_IDLE_CUTOFF;
+    let mut events: Vec<EdgeEventWire> = Vec::new();
+    let mut last_level: Option<Level> = None;
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline || now >= idle_deadline {
+            break;
+        }
+        let level = match chip.read(pin) {
+            Ok(level) => level,
+            Err(err) => return Response::hw_error(&err.to_string()),
+        };
+        if last_level != Some(level) {
+            if last_level.is_some() {
+                events.push(EdgeEventWire {
+                    timestamp_ns: monotonic_now_ns(),
+                    rising: level == Level::High,
+                });
+            }
+            last_level = Some(level);
+            idle_deadline = Instant::now() + EDGE_POLL_IDLE_CUTOFF;
+        }
+    }
+
+    Response::edges(events)
+}
+
 fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> Response {
     let mut buses = i2c.lock().expect("i2c mutex poisoned");
     let bus = match buses.entry(bus_num) {
@@ -315,7 +388,8 @@ fn handle_i2c(bus_num: u8, addr: u8, op: &Operation, i2c: &Mutex<I2cBuses>) -> R
         Operation::Read { .. }
         | Operation::Write { .. }
         | Operation::Transfer { .. }
-        | Operation::WatchEdges { .. } => Response::malformed("i2cバスにはこの操作は使えません"),
+        | Operation::WatchEdges { .. }
+        | Operation::WatchEdgesPolled { .. } => Response::malformed("i2cバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -343,7 +417,8 @@ fn handle_spi(bus_num: u8, chip_select: u8, op: &Operation, spi: &Mutex<SpiDevic
         | Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
         | Operation::WriteReadBytes { .. }
-        | Operation::WatchEdges { .. } => Response::malformed("spiバスにはこの操作は使えません"),
+        | Operation::WatchEdges { .. }
+        | Operation::WatchEdgesPolled { .. } => Response::malformed("spiバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }
@@ -375,7 +450,8 @@ fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>
         | Operation::Write { .. }
         | Operation::WriteReadBytes { .. }
         | Operation::Transfer { .. }
-        | Operation::WatchEdges { .. } => Response::malformed("uartバスにはこの操作は使えません"),
+        | Operation::WatchEdges { .. }
+        | Operation::WatchEdgesPolled { .. } => Response::malformed("uartバスにはこの操作は使えません"),
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
     }
 }

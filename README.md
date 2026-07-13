@@ -14,11 +14,11 @@ Raspberry Pi 4（BCM2711）向けの、pigpio後継となるGPIO/SPI/I2C/UART共
 
 `FEATURE_PRIORITY.md`のTier 1（GPIO・I2C・SPI・UART基本読み書き）とTier 2（GPIOエッジ検出/通知）を実装し、実機（`kazuki1729.local`）で検証済み。Pythonクライアントライブラリ（`clients/python`）も実装済みで、`rpi-sensor-lib`の全7センサークラスがこのクライアント経由で使えるよう二重モード化（`RPI_SENSOR_BACKEND=direct|pi4gpio`）が完了している（`MIGRATION_PLAN.md`の移行順序5/5、詳細は`VERIFICATION_LOG.md`）。
 
-実機テストではこれまでに5件の実運用バグを発見・修正済み: GPIOのプルアップ/ダウン符号バグ、UARTの無期限ブロックバグ、PythonクライアントのOperationタグ付け誤り、クライアント通信エラー時のロック解放漏れ、DHT22デコードのHIGH区間長の測り方の取り違え。
+実機テストではこれまでに6件の実運用バグを発見・修正済み: GPIOのプルアップ/ダウン符号バグ、UARTの無期限ブロックバグ、PythonクライアントのOperationタグ付け誤り、クライアント通信エラー時のロック解放漏れ、DHT22デコードのHIGH区間長の測り方の取り違え、DHT22 pi4gpioモードでのカーネルGPIO v2エッジ割り込みの取りこぼし。
 
-`pi4gpiod`はsystemdサービスとして実機に常駐化済み（`User=pi`・自動再起動対応）。`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証用スクリプト（`scripts/canary_compare.py`）も準備・構造テスト済み。
+`pi4gpiod`はsystemdサービスとして実機に常駐化済み（`User=pi`・自動再起動対応）。センサー再接続後、全7センサークラスの実データ検証も完了した（2026-07-13、`VERIFICATION_LOG.md`）。この過程で、DHT22のpi4gpioモードがカーネルGPIO v2エッジ割り込みの取りこぼしにより実機では常に失敗する重大バグを発見し、Tier 1相当の高速ポーリング方式（`WatchEdgesPolled`）を新規実装して解決した——実機テストでなければ気づけなかった不具合の6件目。
 
-実センサーが物理的に未接続のため、実際の温湿度値等での動作確認・カナリアの実データ比較はまだできていない。次のステップは、センサー再接続後の実データ検証（1〜2週間の値突き合わせ）。
+`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証用スクリプト（`scripts/canary_compare.py`）も準備済み。次のステップは、本番稼働と並行した1〜2週間規模のカナリア本格運用。
 
 ## 構成
 

@@ -151,6 +151,38 @@ class Pi4gpioClient:
         edges: list[dict[str, Any]] = response.get("edges") or []
         return edges
 
+    def gpio_watch_edges_polled(
+        self,
+        pin: int,
+        budget_ms: int,
+        pre_pulse_low_ms: Optional[int] = None,
+        pull: str = "none",
+    ) -> list[dict[str, Any]]:
+        """`gpio_watch_edges`（カーネルのGPIO v2エッジ割り込み、Tier 2）の
+        代替。実機検証で、DHT22のような電圧遷移が緩やかなプロトコルでは
+        割り込みが一部の遷移を取りこぼすことがあると判明したため
+        （2026-07-13、VERIFICATION_LOG.md）、`/dev/gpiomem`の生レベルを
+        daemon側で高速busy-loopポーリングし、レベル変化をエッジとして
+        記録する（Tier 1相当）。戻り値の形式は`gpio_watch_edges`と同一
+        （``[{"timestamp_ns": int, "rising": bool}, ...]``）なので、
+        呼び出し側のデコードロジックはどちらを使っても変更不要。
+
+        `budget_ms`は最大ポーリング時間（daemon側では、これに加えて
+        「前回の遷移から一定時間変化が無ければ打ち切る」内部ロジックも
+        働く）。
+        """
+        response = self._request(
+            {"type": "gpio", "pin": pin},
+            "watch_edges_polled",
+            {
+                "pre_pulse_low_ms": pre_pulse_low_ms,
+                "budget_ms": budget_ms,
+                "pull": pull,
+            },
+        )
+        edges: list[dict[str, Any]] = response.get("edges") or []
+        return edges
+
     def gpio_release(self, pin: int) -> None:
         self._request({"type": "gpio", "pin": pin}, "release")
 

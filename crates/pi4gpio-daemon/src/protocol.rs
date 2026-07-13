@@ -110,6 +110,22 @@ pub enum Operation {
         #[serde(default)]
         pull: PullWire,
     },
+    // GPIO用（Tier 1高速ポーリング版）: `WatchEdges`はカーネルのGPIO v2
+    // エッジ割り込みに依存するが、実機検証でDHT22の一部の遷移（電圧の
+    // 立ち上がり/立ち下がりが緩やかなもの）を取りこぼすことがあると判明した
+    // （2026-07-13、VERIFICATION_LOG.md）。`/dev/gpiomem`の生レベルを
+    // 高速busy-loopで連続サンプリングし、レベル変化をエッジとして記録する
+    // （割り込みに依存しないため取りこぼしに強いが、CPUを占有する点と
+    // ポーリング精度がタイムスタンプの粒度になる点がトレードオフ）。
+    // `budget_ms`到達、または前回の遷移から`idle_cutoff`（daemon内部定数）
+    // 経過のいずれか早い方で打ち切る。戻り値の形式は`WatchEdges`と同一
+    // （呼び出し側のデコードロジックを変更せずに済む）。
+    WatchEdgesPolled {
+        pre_pulse_low_ms: Option<u64>,
+        budget_ms: u64,
+        #[serde(default)]
+        pull: PullWire,
+    },
     Release,
 }
 
