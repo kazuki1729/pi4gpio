@@ -4,6 +4,9 @@ After=network.target
 
 [Service]
 ExecStart=/usr/local/bin/pi4gpiod
+# piユーザーはgpio/i2c/spi/dialoutグループ全てに所属しており、
+# ハードウェアデバイスへのアクセスにroot権限は不要（最小権限の原則）。
+User=pi
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=pi4gpio
