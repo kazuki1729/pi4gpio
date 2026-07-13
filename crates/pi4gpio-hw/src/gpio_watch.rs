@@ -21,6 +21,7 @@
 //! `const assert`でサイズのズレを検知する。
 
 use crate::error::HwError;
+use crate::gpio::PullMode;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::time::{Duration, Instant};
@@ -32,6 +33,9 @@ const GPIO_V2_LINE_NUM_ATTRS_MAX: usize = 10;
 const GPIO_V2_LINE_FLAG_INPUT: u64 = 1 << 2;
 const GPIO_V2_LINE_FLAG_EDGE_RISING: u64 = 1 << 4;
 const GPIO_V2_LINE_FLAG_EDGE_FALLING: u64 = 1 << 5;
+const GPIO_V2_LINE_FLAG_BIAS_PULL_UP: u64 = 1 << 8;
+const GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN: u64 = 1 << 9;
+const GPIO_V2_LINE_FLAG_BIAS_DISABLED: u64 = 1 << 10;
 
 /// BCM2711はGPIO0〜57の58本（gpio.rsのMAX_PINと同じ値）。
 const MAX_PIN: u32 = 57;
@@ -120,7 +124,11 @@ pub struct EdgeWatcher {
 }
 
 impl EdgeWatcher {
-    pub fn open(chip_path: &str, pin: u32) -> Result<Self, HwError> {
+    /// `pull`: DHT22のような、センサー側がオープンドレインでバスを操作する
+    /// プロトコルでは、モジュールに外部プルアップが無い場合SoC側のプルアップ
+    /// が必要になる（`PullMode::Up`を指定する）。gpio.rsのTier 1 Readが
+    /// pullを選べるようにしたのと同じ理由。
+    pub fn open(chip_path: &str, pin: u32, pull: PullMode) -> Result<Self, HwError> {
         if pin > MAX_PIN {
             return Err(HwError::InvalidChannel(pin));
         }
@@ -129,6 +137,12 @@ impl EdgeWatcher {
             .read(true)
             .open(chip_path)
             .map_err(|e| HwError::OpenFailed(format!("{chip_path}: {e}")))?;
+
+        let bias_flag = match pull {
+            PullMode::None => GPIO_V2_LINE_FLAG_BIAS_DISABLED,
+            PullMode::Up => GPIO_V2_LINE_FLAG_BIAS_PULL_UP,
+            PullMode::Down => GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN,
+        };
 
         // SAFETY: ゼロ初期化はこの構造体の全フィールド（配列含む）にとって
         // 有効なビットパターン（0）を作る。
@@ -139,7 +153,8 @@ impl EdgeWatcher {
         request.consumer[..consumer.len()].copy_from_slice(consumer);
         request.config.flags = GPIO_V2_LINE_FLAG_INPUT
             | GPIO_V2_LINE_FLAG_EDGE_RISING
-            | GPIO_V2_LINE_FLAG_EDGE_FALLING;
+            | GPIO_V2_LINE_FLAG_EDGE_FALLING
+            | bias_flag;
 
         // SAFETY: `request`は上で有効な値に初期化済み。`chip`のfdはこの
         // ブロックの間有効。成功時、カーネルが`request.fd`に新しい

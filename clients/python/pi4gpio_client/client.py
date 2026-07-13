@@ -128,11 +128,15 @@ class Pi4gpioClient:
         max_events: int,
         timeout_ms: int,
         pre_pulse_low_ms: Optional[int] = None,
+        pull: str = "none",
     ) -> list[dict[str, Any]]:
         """エッジをタイムスタンプ付きで記録する（Tier 2）。
 
         戻り値は``[{"timestamp_ns": int, "rising": bool}, ...]``。DHT22の
         40ビットデコード等、センサー固有の解釈は呼び出し側の責務。
+
+        `pull`は``"none"``/``"up"``/``"down"``のいずれか。DHT22モジュールに
+        外部プルアップが無い場合は``"up"``を指定する。
         """
         response = self._request(
             {"type": "gpio", "pin": pin},
@@ -141,6 +145,7 @@ class Pi4gpioClient:
                 "pre_pulse_low_ms": pre_pulse_low_ms,
                 "max_events": max_events,
                 "timeout_ms": timeout_ms,
+                "pull": pull,
             },
         )
         edges: list[dict[str, Any]] = response.get("edges") or []

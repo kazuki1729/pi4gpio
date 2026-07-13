@@ -8,7 +8,7 @@
 //!
 //! 使い方: cargo run --release --example gpio_watch_smoke_test -- <pin>
 
-use pi4gpio_hw::gpio::{GpioChip, Level};
+use pi4gpio_hw::gpio::{GpioChip, Level, PullMode};
 use pi4gpio_hw::gpio_watch::{EdgeEvent, EdgeWatcher};
 use std::process::ExitCode;
 use std::sync::mpsc;
@@ -32,7 +32,8 @@ fn main() -> ExitCode {
 
     let (ready_tx, ready_rx) = mpsc::channel::<()>();
     let watcher_thread = thread::spawn(move || -> Result<Vec<EdgeEvent>, String> {
-        let mut watcher = EdgeWatcher::open(CHIP_PATH, pin).map_err(|e| e.to_string())?;
+        let mut watcher =
+            EdgeWatcher::open(CHIP_PATH, pin, PullMode::None).map_err(|e| e.to_string())?;
         ready_tx.send(()).ok();
         watcher
             .wait_events(Duration::from_secs(3), TOGGLE_COUNT)

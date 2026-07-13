@@ -91,9 +91,32 @@ async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io:
     let client_id = ClientId::from_unix_stream(&stream)?;
     println!("pi4gpiod: client connected ({client_id:?})");
 
-    let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    let (reader, writer) = stream.into_split();
     let mut held_buses: HashSet<BusId> = HashSet::new();
+
+    let result = process_requests(reader, writer, &client_id, &peripherals, &mut held_buses).await;
+
+    // process_requestsがEOF（Ok）で終わってもI/Oエラー（Err、例えば
+    // クライアントが強制切断されたことによるBroken pipe）で終わっても、
+    // 保持中のロックは必ず解放する。以前は`?`によるアーリーリターンで
+    // このブロック自体がスキップされることがあり、通信エラーで切断した
+    // クライアントのロックが解放されないまま残ってしまうバグがあった
+    // （実機検証で発見、VERIFICATION_LOG.md参照）。
+    for bus in held_buses.drain() {
+        peripherals.locks.release(bus, &client_id);
+    }
+    println!("pi4gpiod: client disconnected ({client_id:?})");
+    result
+}
+
+async fn process_requests(
+    reader: tokio::net::unix::OwnedReadHalf,
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    client_id: &ClientId,
+    peripherals: &Arc<Peripherals>,
+    held_buses: &mut HashSet<BusId>,
+) -> io::Result<()> {
+    let mut lines = BufReader::new(reader).lines();
 
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
@@ -106,16 +129,16 @@ async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io:
                 // （Tier 1の各操作はマイクロ秒オーダーで無視できる差だが、
                 // これは無視できない）。tokioのワーカースレッドを塞がない
                 // よう、実際のディスパッチはブロッキングスレッドプールで行う。
-                let peripherals = Arc::clone(&peripherals);
+                let peripherals = Arc::clone(peripherals);
                 let client_id = client_id.clone();
-                let mut held = std::mem::take(&mut held_buses);
+                let mut held = std::mem::take(held_buses);
                 let (response, held) = tokio::task::spawn_blocking(move || {
                     let response = dispatch(&request, &client_id, &peripherals, &mut held);
                     (response, held)
                 })
                 .await
                 .expect("dispatch task panicked");
-                held_buses = held;
+                *held_buses = held;
                 response
             }
             Err(err) => Response::malformed(&err.to_string()),
@@ -127,10 +150,6 @@ async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io:
         writer.write_all(&payload).await?;
     }
 
-    for bus in held_buses.drain() {
-        peripherals.locks.release(bus, &client_id);
-    }
-    println!("pi4gpiod: client disconnected ({client_id:?})");
     Ok(())
 }
 
@@ -203,7 +222,15 @@ fn handle_gpio(pin: u32, op: &Operation, gpio: &Mutex<GpioChip>) -> Response {
             pre_pulse_low_ms,
             max_events,
             timeout_ms,
-        } => handle_watch_edges(pin, *pre_pulse_low_ms, *max_events, *timeout_ms, gpio),
+            pull,
+        } => handle_watch_edges(
+            pin,
+            *pre_pulse_low_ms,
+            *max_events,
+            *timeout_ms,
+            *pull,
+            gpio,
+        ),
         Operation::ReadBytes { .. }
         | Operation::WriteBytes { .. }
         | Operation::WriteReadBytes { .. }
@@ -226,6 +253,7 @@ fn handle_watch_edges(
     pre_pulse_low_ms: Option<u64>,
     max_events: usize,
     timeout_ms: u64,
+    pull: PullWire,
     gpio: &Mutex<GpioChip>,
 ) -> Response {
     if let Some(ms) = pre_pulse_low_ms {
@@ -240,7 +268,7 @@ fn handle_watch_edges(
         std::thread::sleep(Duration::from_millis(ms));
     }
 
-    let watcher = EdgeWatcher::open(GPIOCHIP_PATH, pin);
+    let watcher = EdgeWatcher::open(GPIOCHIP_PATH, pin, pull_mode_from_wire(pull));
     match watcher.and_then(|mut w| w.wait_events(Duration::from_millis(timeout_ms), max_events)) {
         Ok(events) => Response::edges(
             events

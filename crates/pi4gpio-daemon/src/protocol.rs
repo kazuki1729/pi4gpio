@@ -100,11 +100,15 @@ pub enum Operation {
     },
     // GPIO用（Tier 2）: エッジをタイムスタンプ付きで記録する。
     // `pre_pulse_low_ms`を指定すると、監視開始前にそのピンをLOWに駆動して
-    // から`Some(ms)`ミリ秒待つ（DHT22等のスタート信号パターン）。
+    // から`Some(ms)`ミリ秒待つ（DHT22等のスタート信号パターン）。`pull`は
+    // 監視中のSoC側プルアップ/ダウン（外部プルアップが無いモジュール向け、
+    // `pull`省略時はNone）。
     WatchEdges {
         pre_pulse_low_ms: Option<u64>,
         max_events: usize,
         timeout_ms: u64,
+        #[serde(default)]
+        pull: PullWire,
     },
     Release,
 }
