@@ -33,25 +33,28 @@ pi4gpioが完成すれば、アドホックスクリプトは`rpi-hw-lock`で本
 - pi4gpioがsystemdサービスとして安定起動・自動再起動する状態になっていること — 未着手。現状は手動起動での検証のみ（`VERIFICATION_LOG.md`）で、`systemd/pi4gpio.service`ユニット自体はリポジトリに存在するが実運用での自動起動確認はまだ
 - この段階ではリモート通信は不要（`sensor-tiered-client.service`もアドホックスクリプトも同一Pi上で動くため、`NETWORK_POLICY.md`のTailscale/APIキーはローカルソケット運用の範囲では関与しない）
 
-## 4. `rpi-sensor-lib`側の対応：二重モード化
+## 4. `rpi-sensor-lib`側の対応：二重モード化 — ✅ 実装完了（2026-07-13）
 
-各センサークラス（`bme280_pressure.py`・`grove_mcp3208_sensors.py`・`joystick_mcp3208.py`・`potentiometer_mcp3208.py`・`robust_dht22.py`・`tactile_button.py`・`mh_x19c_co2.py`）に、直接ハードウェアアクセスとpi4gpio経由アクセスを切り替えられるバックエンド抽象化を導入する。
+各センサークラス（`bme280_pressure.py`・`grove_mcp3208_sensors.py`・`joystick_mcp3208.py`・`potentiometer_mcp3208.py`・`robust_dht22.py`・`tactile_button.py`・`mh_x19c_co2.py`）に、直接ハードウェアアクセスとpi4gpio経由アクセスを切り替えられるバックエンド抽象化を導入した。
 
-- 環境変数（例: `RPI_SENSOR_BACKEND=direct|pi4gpio`）で切り替え可能にする
+- 環境変数`RPI_SENSOR_BACKEND=direct|pi4gpio`で切り替え可能（`kazuki1729/rpi-sensor-lib`の`rpi_sensors/_pi4gpio_backend.py`）
 - デフォルトは`direct`のまま維持し、`pi4gpio`は明示的にオプトインした場合のみ有効化
 - これにより、pi4gpio側に問題が出ても設定変更＋サービス再起動だけで即座に切り戻せる
+- I2C/SPI/UARTそれぞれに`smbus2`/`spidev`/`pyserial`互換シム（`Pi4gpioSMBusShim`/`Pi4gpioSpiTransferShim`/`Pi4gpioSerialShim`）を用意し、`bme280`パッケージ等のサードパーティ依存は無改造で動く設計にした
 
-## 5. センサー単位の段階的移行順序
+## 5. センサー単位の段階的移行順序 — ✅ 全5項目実装・実機検証完了（2026-07-13）
 
-全センサーを一度に切り替えず、影響範囲とリスクが小さいものから順に検証する。
+全センサーを一度に切り替えず、影響範囲とリスクが小さいものから順に検証した。実機検証の詳細は`VERIFICATION_LOG.md`参照。
 
-| 順序 | 対象 | 理由 |
-|---|---|---|
-| 1 | `tactile_button.py` | 単純なデジタル入力のみ。リアルタイム性要求が緩く、影響が最小 |
-| 2 | `bme280_pressure.py` | I2C、読み取り頻度が低く許容誤差も大きい |
-| 3 | `grove_mcp3208_sensors.py` / `joystick_mcp3208.py` / `potentiometer_mcp3208.py` | SPI経由のADC。プロトコル自体はシンプルだが読み取り頻度がやや高い |
-| 4 | `mh_x19c_co2.py` | UART。パケット単位のプロトコルなのでSPI/I2Cとは異なる検証が要る |
-| 5 | `robust_dht22.py` | 最重要かつ最高難度。`FEATURE_PRIORITY.md` Tier 2（GPIO通知/コールバック）に依存し、pi4gpioの真価が問われる部分。既存のbusy-loop実装との読み取り成功率比較が必須なため最後に回す |
+| 順序 | 対象 | 理由 | 状態 |
+|---|---|---|---|
+| 1 | `tactile_button.py` | 単純なデジタル入力のみ。リアルタイム性要求が緩く、影響が最小 | ✅ 完了 |
+| 2 | `bme280_pressure.py` | I2C、読み取り頻度が低く許容誤差も大きい | ✅ 完了 |
+| 3 | `grove_mcp3208_sensors.py` / `joystick_mcp3208.py` / `potentiometer_mcp3208.py` | SPI経由のADC。プロトコル自体はシンプルだが読み取り頻度がやや高い | ✅ 完了 |
+| 4 | `mh_x19c_co2.py` | UART。パケット単位のプロトコルなのでSPI/I2Cとは異なる検証が要る | ✅ 完了 |
+| 5 | `robust_dht22.py` | 最重要かつ最高難度。`FEATURE_PRIORITY.md` Tier 2（GPIO通知/コールバック）に依存し、pi4gpioの真価が問われる部分。既存のbusy-loop実装との読み取り成功率比較が必須なため最後に回す | ✅ 完了 |
+
+**注意**: 実センサーが物理的に未接続の状態が移行作業全体を通じて続いていたため、実装・通信経路・エラーハンドリングの検証（実機）と、DHT22デコードロジックの検証（既知の合成データ）は完了しているが、**実際の温湿度値等での動作確認はまだ行えていない**。センサー再接続後に改めて実データでの検証が必要。
 
 ## 6. 並行稼働・カナリア検証
 

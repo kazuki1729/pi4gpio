@@ -1,6 +1,6 @@
 # セッション引き継ぎメモ（pi4gpioプロジェクト）
 
-`pi4gpio`は設計フェーズを終え、`FEATURE_PRIORITY.md`のTier 1（GPIO・I2C・SPI・UART基本読み書き）とTier 2（GPIOエッジ検出/通知）を実装・実機検証済み（`VERIFICATION_LOG.md`参照）。次はPythonクライアントライブラリと`rpi-sensor-lib`側の二重モード化。本ファイルは、このプロジェクトの議論だけを別セッションに引き継ぐための独立メモ（week09全体の引き継ぎとは別スコープ）。作業日: 2026-07-12。
+`pi4gpio`は設計フェーズを終え、`FEATURE_PRIORITY.md`のTier 1（GPIO・I2C・SPI・UART基本読み書き）とTier 2（GPIOエッジ検出/通知）、Pythonクライアントライブラリ（`clients/python`）、`rpi-sensor-lib`側の全7センサークラスの二重モード化（`MIGRATION_PLAN.md`移行順序5/5）まで実装・実機検証済み（`VERIFICATION_LOG.md`参照）。実センサーが物理的に未接続のため実データでの検証は未実施。次は、センサー再接続後の実データ検証と`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証。本ファイルは、このプロジェクトの議論だけを別セッションに引き継ぐための独立メモ（week09全体の引き継ぎとは別スコープ）。作業日: 2026-07-12〜13。
 
 ## 1. プロジェクトの位置づけ
 
