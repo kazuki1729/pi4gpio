@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """MIGRATION_PLAN.md §6の並行稼働・カナリア検証用スクリプト。
 
-`rpi-sensor-lib`のdirect/pi4gpio両バックエンドで同じセンサーを読み、
-値・レイテンシ・成功率をCSVに記録する。本番の`sensor-tiered-client.service`
-には一切触れない、別プロセスとして動作する（本番を止めない、
+`rpi-sensor-lib`のdirect/pi4gpio両バックエンドで安全に共存できるセンサーを
+読み、値・レイテンシ・成功率をCSVに記録する。本番の
+`sensor-tiered-client.service`には一切触れない、別プロセスとして動作する（本番を止めない、
 MIGRATION_PLAN.md §6の方針通り）。
 
 【重要な設計上の制約】
@@ -12,7 +12,7 @@ MIGRATION_PLAN.md §6の方針通り）。
   ションをシリアライズするため、direct/pi4gpio両方を本スクリプト自身が
   独立に読んでも安全に並行稼働できる（VERIFICATION_LOGのTier 1検証で
   確認済みの前提）。
-- GPIO（tactile_button）・UART（mh_x19c_co2）・DHT22（robust_dht22）は、
+- GPIO（tactile_button）・DHT22（robust_dht22）は、
   本番プロセスが既にlgpio/pyserial経由で同じピン/デバイスを掴んでいる
   ため、本スクリプトが独自にdirectモードで読むと競合する
   （lgpioはgpiochip行を排他確保するためEBUSYになりうる、UARTは
@@ -22,6 +22,10 @@ MIGRATION_PLAN.md §6の方針通り）。
   「送信準備: {json}」ログから抽出する（厳密な同時比較ではないが、
   傾向の突き合わせとしては十分）。ボタン状態は本番側が周期ログに含めて
   いないため、参考値なしでpi4gpioモードの成功率のみ記録する。
+- UART（MH-Z19C）は、本番のdirectアクセスとpi4gpioアクセスが同じ受信列を
+  消費し、応答破損を起こすことを実機で確認したため、本カナリアからの
+  ハードウェアアクセスを全面的に禁止する。CSVには本番ログの観測値だけを
+  `production_log`として転記し、ログ取得経路の継続性のみを監視する。
 
 配線パラメータは本番（sensor_client_tiered.py）に合わせている:
   tactile_button pin=6, robust_dht22 pin=26, bme280 addr=0x76,
@@ -49,18 +53,6 @@ import time
 # バージョンのため使わない）。
 sys.path.insert(0, os.path.expanduser("~/pi4gpio/clients/python"))
 sys.path.insert(0, os.path.expanduser("~/rpi-sensor-lib-canary"))
-
-from rpi_sensors import (  # noqa: E402
-    BME280Sensor,
-    DHT22ReadError,
-    GroveLightSensor,
-    GroveSoundSensor,
-    JoystickMCP3208,
-    MHZ19C,
-    PotentiometerMCP3208,
-    RobustDHT22,
-    TactileButton,
-)
 
 PIN_BUTTON = 6
 PIN_DHT22 = 26
@@ -131,6 +123,18 @@ def build_sensors():
     （毎回作り直すと不要な再初期化I/Oが発生するため、本番の実装方針に
     合わせて1回だけ構築し使い回す）。
     """
+    # import時点では実機依存モジュールを要求しない。これにより、カナリアの
+    # 構造テストをCI上で実行し、UARTクラスを再び混入させないことも検査できる。
+    from rpi_sensors import (  # noqa: PLC0415
+        BME280Sensor,
+        GroveLightSensor,
+        GroveSoundSensor,
+        JoystickMCP3208,
+        PotentiometerMCP3208,
+        RobustDHT22,
+        TactileButton,
+    )
+
     sensors = {"direct": {}, "pi4gpio": {}}
 
     # I2C/SPIは両バックエンドを独立に構築(並行稼働が安全なため)。
@@ -142,10 +146,10 @@ def build_sensors():
         sensors[backend]["joystick"] = JoystickMCP3208(deadzone=150)
         sensors[backend]["potentiometer"] = PotentiometerMCP3208(channel=MCP3208_CH_POT)
 
-    # GPIO/UART/DHT22はpi4gpioモードのみ構築(directは本番と競合するため作らない)。
+    # GPIO/DHT22はpi4gpioモードのみ構築(directは本番と競合するため作らない)。
+    # MH-Z19Cはどちらのモードでも構築しない。UARTアクセスは本番だけに限定する。
     os.environ["RPI_SENSOR_BACKEND"] = "pi4gpio"
     sensors["pi4gpio"]["tactile_button"] = TactileButton(pin=PIN_BUTTON)
-    sensors["pi4gpio"]["mh_z19c"] = MHZ19C()
     sensors["pi4gpio"]["robust_dht22"] = RobustDHT22(
         pin=PIN_DHT22, max_retries=1, read_interval=2.0
     )
@@ -200,23 +204,27 @@ def run_once(writer, sensors, prod_payload):
         [timestamp, "tactile_button", "pi4gpio", ok, value, f"{latency_ms:.1f}", err, ""]
     )
 
-    # --- UART: mh_z19c_co2（pi4gpioモードのみ、参考値は本番ログから） ---
-    ok, value, latency_ms, err = _timed_call(
-        lambda: sensors["pi4gpio"]["mh_z19c"].read_co2()
-    )
+    # --- UART: カナリアからは一切アクセスせず、本番ログだけを転記 ---
     prod_ref = (prod_payload or {}).get("mh_z19c", {}).get("co2")
+    ok = prod_ref is not None
+    err = "" if ok else "production_reference_missing"
     writer.writerow(
-        [timestamp, "mh_z19c_co2", "pi4gpio", ok, value, f"{latency_ms:.1f}", err, prod_ref]
+        [
+            timestamp,
+            "mh_z19c_co2",
+            "production_log",
+            ok,
+            prod_ref if ok else "",
+            "",
+            err,
+            prod_ref if ok else "",
+        ]
     )
 
     # --- DHT22: robust_dht22（pi4gpioモードのみ、参考値は本番ログから） ---
-    def _read_dht22():
-        try:
-            return sensors["pi4gpio"]["robust_dht22"].read()
-        except DHT22ReadError as e:
-            raise RuntimeError(str(e)) from e
-
-    ok, value, latency_ms, err = _timed_call(_read_dht22)
+    ok, value, latency_ms, err = _timed_call(
+        lambda: sensors["pi4gpio"]["robust_dht22"].read()
+    )
     dht22_ref = (prod_payload or {}).get("dht22", {})
     prod_ref = (dht22_ref.get("temp"), dht22_ref.get("hum")) if dht22_ref else None
     writer.writerow(

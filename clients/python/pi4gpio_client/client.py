@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
+import time
 from typing import Any, BinaryIO, Optional
 
 DEFAULT_SOCKET_PATH = "/run/pi4gpio/pi4gpio.sock"
@@ -32,6 +34,19 @@ _RESPONSE_TIMEOUT_MARGIN_SEC = 2.0
 
 class Pi4gpioError(Exception):
     """pi4gpiodがエラーレスポンス（``ok: false``）を返した場合に送出する。"""
+
+
+class Pi4gpioConnectionError(Pi4gpioError):
+    """pi4gpiodとの通信が切断された場合に送出する。
+
+    ``reconnected``が真なら、新しい接続の確立までは完了している。ただし、
+    切断時に処理中だった要求は二重実行を避けるため自動再送しない。呼び出し側は
+    この例外をその周期の失敗として扱い、次の通常周期で操作を再実行する。
+    """
+
+    def __init__(self, message: str, *, reconnected: bool) -> None:
+        super().__init__(message)
+        self.reconnected = reconnected
 
 
 class Pi4gpioClient:
@@ -49,30 +64,100 @@ class Pi4gpioClient:
     """
 
     def __init__(
-        self, socket_path: str = DEFAULT_SOCKET_PATH, timeout: Optional[float] = 5.0
+        self,
+        socket_path: str = DEFAULT_SOCKET_PATH,
+        timeout: Optional[float] = 5.0,
+        *,
+        auto_reconnect: bool = True,
+        reconnect_attempts: int = 8,
+        reconnect_initial_delay: float = 0.1,
+        reconnect_max_delay: float = 1.0,
     ):
+        if reconnect_attempts < 1:
+            raise ValueError("reconnect_attemptsは1以上である必要があります")
+        if reconnect_initial_delay < 0 or reconnect_max_delay < 0:
+            raise ValueError("再接続待ち時間は0以上である必要があります")
+        if reconnect_max_delay < reconnect_initial_delay:
+            raise ValueError(
+                "reconnect_max_delayはreconnect_initial_delay以上である必要があります"
+            )
         self._socket_path = socket_path
         self._timeout = timeout
+        self._auto_reconnect = auto_reconnect
+        self._reconnect_attempts = reconnect_attempts
+        self._reconnect_initial_delay = reconnect_initial_delay
+        self._reconnect_max_delay = reconnect_max_delay
         self._sock: Optional[socket.socket] = None
         self._reader: Optional[BinaryIO] = None
+        # 1接続のNDJSON要求/応答は直列である。再接続中に別スレッドが同じ
+        # ソケットを使わないよう、接続状態の変更も同じロックで保護する。
+        self._request_lock = threading.RLock()
 
     def connect(self) -> "Pi4gpioClient":
-        if self._sock is not None:
+        with self._request_lock:
+            if self._sock is not None:
+                return self
+            self._connect_with_retries()
             return self
+
+    def _create_connected_socket(self) -> socket.socket:
+        """接続済みソケットを作る。テストではこの境界だけを差し替える。"""
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self._timeout)
-        sock.connect(self._socket_path)
+        try:
+            sock.settimeout(self._timeout)
+            sock.connect(self._socket_path)
+            return sock
+        except BaseException:
+            sock.close()
+            raise
+
+    def _connect_once(self) -> None:
+        sock = self._create_connected_socket()
+        try:
+            reader = sock.makefile("rb")
+        except BaseException:
+            sock.close()
+            raise
         self._sock = sock
-        self._reader = sock.makefile("rb")
-        return self
+        self._reader = reader
+
+    def _connect_with_retries(self) -> None:
+        attempts = self._reconnect_attempts if self._auto_reconnect else 1
+        delay = self._reconnect_initial_delay
+        last_error: Optional[BaseException] = None
+        for attempt in range(attempts):
+            try:
+                self._connect_once()
+                return
+            except (OSError, ValueError) as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(delay)
+                    delay = min(delay * 2, self._reconnect_max_delay)
+
+        raise Pi4gpioConnectionError(
+            f"pi4gpiodへ接続できませんでした（{attempts}回試行）: {last_error}",
+            reconnected=False,
+        ) from last_error
+
+    def _disconnect(self) -> None:
+        # 先に共有状態から外す。close中に例外が出ても壊れた接続を再利用しない。
+        reader, self._reader = self._reader, None
+        sock, self._sock = self._sock, None
+        if reader is not None:
+            try:
+                reader.close()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def close(self) -> None:
-        if self._reader is not None:
-            self._reader.close()
-            self._reader = None
-        if self._sock is not None:
-            self._sock.close()
-            self._sock = None
+        with self._request_lock:
+            self._disconnect()
 
     def __enter__(self) -> "Pi4gpioClient":
         return self.connect()
@@ -103,35 +188,58 @@ class Pi4gpioClient:
         （デフォルト5秒）を超えると、daemonが応答するより先にクライアント
         側がタイムアウトしてしまうことがある（実機検証で発見）。
         """
-        if self._sock is None:
-            self.connect()
-        assert self._sock is not None and self._reader is not None
+        with self._request_lock:
+            if self._sock is None:
+                self._connect_with_retries()
+            assert self._sock is not None and self._reader is not None
 
-        op: Any = op_name if op_args is None else {op_name: op_args}
-        payload = json.dumps({"bus": bus, "op": op}, separators=(",", ":")) + "\n"
+            op: Any = op_name if op_args is None else {op_name: op_args}
+            payload = (
+                json.dumps({"bus": bus, "op": op}, separators=(",", ":")) + "\n"
+            )
 
-        original_timeout = self._sock.gettimeout()
-        needs_bump = (
-            min_response_timeout is not None
-            and original_timeout is not None
-            and min_response_timeout > original_timeout
-        )
-        if needs_bump:
-            self._sock.settimeout(min_response_timeout)
-        try:
-            self._sock.sendall(payload.encode("utf-8"))
-            line = self._reader.readline()
-        finally:
+            request_sock = self._sock
+            original_timeout = request_sock.gettimeout()
+            needs_bump = (
+                min_response_timeout is not None
+                and original_timeout is not None
+                and min_response_timeout > original_timeout
+            )
             if needs_bump:
-                self._sock.settimeout(original_timeout)
+                request_sock.settimeout(min_response_timeout)
+            try:
+                request_sock.sendall(payload.encode("utf-8"))
+                line = self._reader.readline()
+                if not line:
+                    raise EOFError("空の応答")
+                response: dict[str, Any] = json.loads(line)
+            except (OSError, EOFError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                self._disconnect()
+                reconnected = False
+                if self._auto_reconnect:
+                    try:
+                        self._connect_with_retries()
+                        reconnected = True
+                    except Pi4gpioConnectionError:
+                        pass
 
-        if not line:
-            raise Pi4gpioError("pi4gpiodとの接続が切断されました（空の応答）")
-        response: dict[str, Any] = json.loads(line)
+                state = "再接続済み" if reconnected else "再接続失敗"
+                raise Pi4gpioConnectionError(
+                    "pi4gpiodとの通信が切断されました"
+                    f"（{state}）。処理中の要求は安全のため自動再送していません: {exc}",
+                    reconnected=reconnected,
+                ) from exc
+            finally:
+                # 障害時は_disconnect()済みなので、閉じたソケットへ触れない。
+                if needs_bump and self._sock is request_sock:
+                    try:
+                        request_sock.settimeout(original_timeout)
+                    except OSError:
+                        pass
 
-        if not response.get("ok", False):
-            raise Pi4gpioError(response.get("error", "不明なエラー"))
-        return response
+            if not response.get("ok", False):
+                raise Pi4gpioError(response.get("error", "不明なエラー"))
+            return response
 
     # --- GPIO ---
 

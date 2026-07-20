@@ -1,5 +1,5 @@
 [Unit]
-Description=pi4gpio direct/pi4gpio canary comparison (MIGRATION_PLAN.md section 6)
+Description=pi4gpio safe canary comparison (no UART hardware access)
 After=network.target pi4gpio.service sensor-tiered-client.service
 Wants=pi4gpio.service
 
@@ -10,6 +10,7 @@ WorkingDirectory=/home/pi/pi4gpio/scripts
 # 本番venv(lgpio/spidev/smbus2/pyserial/RPi.bme280導入済み)のPythonを使う。
 # rpi_sensorsは二重モード対応版(~/rpi-sensor-lib-canary)を使い、本番の
 # site-packages(二重モード化前の0.1.0)には一切触れない。
+# MH-Z19C/UARTは本番ログの値だけを記録し、カナリアからはアクセスしない。
 ExecStart=/home/pi/sensor-tiered-store/.venv/bin/python3 canary_compare.py --interval 30 --output /home/pi/pi4gpio/scripts/canary_log.csv
 Restart=on-failure
 RestartSec=5
