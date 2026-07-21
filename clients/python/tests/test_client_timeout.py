@@ -22,12 +22,12 @@ def _make_client_with_socketpair(base_timeout):
     片方を直接差し込んだクライアントを作る。テスト専用の配線であり、
     本番コードにテスト用の分岐を追加せずに済む。
     """
-    client_sock, server_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    client_sock, server_sock = socket.socketpair()
     client_sock.settimeout(base_timeout)
 
-    client = Pi4gpioClient.__new__(Pi4gpioClient)
-    client._socket_path = "<socketpair>"
-    client._timeout = base_timeout
+    client = Pi4gpioClient(
+        socket_path="<socketpair>", timeout=base_timeout, reconnect_attempts=1
+    )
     client._sock = client_sock
     client._reader = client_sock.makefile("rb")
     return client, server_sock

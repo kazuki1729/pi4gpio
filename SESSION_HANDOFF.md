@@ -77,3 +77,19 @@
 - `rpi-sensor-lib`のTrusted Publishing化の経緯: 同上 §14
 - `rpi-hw-lock`ローカルパス: `C:\Users\Kazuki\rpi-hw-lock\`
 - `rpi-sensor-lib`ローカルパス: `C:\Users\Kazuki\github-ripo\`
+
+## 6. 実運用で顕在化した教訓：UARTでのdirect/pi4gpio共存リスク（2026-07-14〜15）
+
+**現象**: 本番の`sensor_client_tiered.py`（directモード、`pyserial`で`/dev/serial0`を直接使用）で、MH-Z19C(CO2)が2026-07-13 20:43:46以降26時間以上ずっと`None`（一時的に`co2=63852`という物理的にあり得ない値が1件混入）になっていた。
+
+**原因の切り分け**:
+1. `i2cdetect -y 1`でBME280(0x76)は検出済み、BME280単体の`read()`も正常（気圧等の妥当な値を取得）→ ハードウェア・配線自体は無関係と判明
+2. `rpi-hw-lock`で`sensor-tiered-client.service`のみを止めて生のシリアルコマンドを送ったところ、8バイト（期待は9バイト）の不正な応答 → まだ原因特定に至らず
+3. `canary-compare.service`（direct/pi4gpio比較用。UART/GPIO/DHT22はdirectと競合するため**pi4gpio経由でのみ**読む設計）**も同時に稼働していたことに気づき**、これも含めて排他停止した上で再度生コマンドを送信 → **正規のMH-Z19Cレスポンス(`0xFF 0x86`ヘッダー)が返り、CO2=402ppmという妥当な値を取得**。これで初めて原因が確定した
+
+**結論・教訓**:
+- pi4gpioの`LockTable`は「pi4gpio経由で接続してきたクライアント同士」でしか排他が効かない設計であり、**pi4gpioを介さない`direct`方式のプロセスまでは元々守れない**（I2C/SPIはカーネルがバス単位で排他するため実害が出ないが、**UARTだけはこの前提が成立しない**——これは`MIGRATION_PLAN.md`で開発時点から明記していた既知の制約そのもの）
+- 問題は「pi4gpioのコードの不具合」ではなく、**この既知の制約に対する対策（`rpi-hw-lock`での調整等）が、常時稼働する`canary-compare.service`の運用に対しては実際には入れられていなかった**こと（アドホックな検証スクリプト用の対策はあったが、常駐比較サービス自体はノーガードで本番と同じUARTを触り続けていた）
+- **診断時の注意点**: この種の問題を切り分ける際は、`sensor-tiered-client.service`だけでなく**`canary-compare.service`もUART/GPIO/DHT22については競合の当事者になりうる**ことを忘れずに、両方を排他対象に含めて検証すること（今回、最初の診断で`canary-compare.service`を止め忘れ、誤った中間結論に至りかけた）
+
+**未対応**: `canary-compare.service`のUART比較（MH-Z19C）を本番と競合しない形に見直す必要がある（比較自体を取りやめる、または本番の送信タイミングを避けて読む等）。

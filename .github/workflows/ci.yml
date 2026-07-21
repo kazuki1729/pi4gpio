@@ -35,3 +35,27 @@ jobs:
         run: cargo build --workspace --target aarch64-unknown-linux-gnu
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+  python-client-and-operations:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: install Python client
+        run: python -m pip install -e clients/python
+
+      - name: syntax check
+        run: python -m compileall -q clients/python scripts
+
+      - name: client recovery fault injection tests
+        run: python -m unittest discover -s clients/python/tests -v
+
+      - name: canary and systemd safety tests
+        run: python -m unittest discover -s scripts/tests -v

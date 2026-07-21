@@ -9,6 +9,7 @@ Raspberry Pi 4（BCM2711）向けの、pigpio後継となるGPIO/SPI/I2C/UART共
 - [NETWORK_POLICY.md](NETWORK_POLICY.md) — ネットワーク制御方針
 - [MIGRATION_PLAN.md](MIGRATION_PLAN.md) — `rpi-sensor-lib`移行計画
 - [VERIFICATION_LOG.md](VERIFICATION_LOG.md) — 実機での動作確認記録
+- [FAULT_INJECTION.md](FAULT_INJECTION.md) — 隔離テストと実機systemd障害注入の安全手順
 
 ## 現在の状態
 
@@ -18,7 +19,7 @@ Raspberry Pi 4（BCM2711）向けの、pigpio後継となるGPIO/SPI/I2C/UART共
 
 `pi4gpiod`はsystemdサービスとして実機に常駐化済み（`User=pi`・自動再起動対応）。センサー再接続後、全7センサークラスの実データ検証も完了した（2026-07-13、`VERIFICATION_LOG.md`）。この過程で、DHT22のpi4gpioモードがカーネルGPIO v2エッジ割り込みの取りこぼしにより実機では常に失敗する重大バグを発見し、Tier 1相当の高速ポーリング方式（`WatchEdgesPolled`）を新規実装して解決した——実機テストでなければ気づけなかった不具合の6件目。
 
-`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証用スクリプト（`scripts/canary_compare.py`）も準備済み。次のステップは、本番稼働と並行した1〜2週間規模のカナリア本格運用。
+`MIGRATION_PLAN.md` §6の並行稼働・カナリア検証用スクリプト（`scripts/canary_compare.py`）は、UART二重読み取りによるMH-Z19C応答破損を受け、UARTへ一切アクセスせず本番ログだけを記録する設計へ修正した。Pythonクライアントにはデーモン再起動後の有界再接続を実装し、処理中要求を自動再送しない安全性を障害注入テストで検証している。実機用試験は`FAULT_INJECTION.md`参照。
 
 ## 構成
 
