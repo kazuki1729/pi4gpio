@@ -34,14 +34,15 @@
 
 1. 2026-07-22 05:39 JST以降に`python3 /home/pi/pi4gpio/scripts/analyze_direct_journal.py --hours 24`を再実行
 2. `window.actual_hours`が約24時間なら正式なdirect基準値として`VERIFICATION_LOG.md`へ保存
-3. 全差分レビュー後、明示的なPi4gpioファイルだけをstage・commit
-4. `gh auth login -h github.com`後、push・draft Pull Request作成
+3. 正式基準値を追加する場合は、テスト後にPull Request #2の同じブランチへpush
+4. GitHub Actionsと差分を確認し、実機試験を行う保守時間帯を別途決める
 
-## GitHub側の未完了事項
+## GitHub側の状態
 
-- `gh auth status`はユーザー`kazuki1729`のトークン無効
-- pushまたはPR作成前に`gh auth login -h github.com`が必要
-- branch作成済みだが、commit・push・Pull Requestは未実施
+- `gh auth status`はユーザー`kazuki1729`で正常
+- `agent/prepare-pi4gpio-testing`をoriginへpush済み
+- Draft Pull Request #2: https://github.com/kazuki1729/pi4gpio/pull/2
+- 正式24時間基準と実機ハードウェア試験は未完了のため、Draftを維持する
 
 ## 変更してはいけないもの
 
