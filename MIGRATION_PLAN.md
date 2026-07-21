@@ -58,12 +58,17 @@ pi4gpioが完成すれば、アドホックスクリプトは`rpi-hw-lock`で本
 
 ## 6. 並行稼働・カナリア検証
 
-- 各センサーの移行時、`direct`モードと`pi4gpio`モードを同じPi上で並行稼働させ、一定期間（目安1〜2週間）値の一致・レイテンシ・エラー率を比較する
-- 特に`robust_dht22.py`は、pi4gpioのGPIO通知機能に切り替えた後の読み取り成功率（現状`max_retries=5`でのリトライ率）が、既存実装より改善しているか（悪化していないか）を定量的に確認する
-- 本番の`sensor-tiered-client.service`は`direct`モードのまま動かし続け、並行稼働は別プロセス（テスト用の一時的なサービスまたはcronジョブ）で行う。本番を止めない
-- ✅ 比較用スクリプト`scripts/canary_compare.py`を準備済み・構造テスト完了（2026-07-13、`VERIFICATION_LOG.md`参照）。I2C/SPI系センサーはdirect/pi4gpio両方を並行読み取りしCSVへ記録する。GPIO/DHT22はpi4gpioモードと本番ログを突き合わせる。UARTは二重読み取りによるMH-Z19C応答破損が確認されたため、2026-07-21にカナリアからのハードウェアアクセスを完全に除去し、本番ログ値の転記だけへ変更した
+- `direct`本番とpi4gpioカナリアが同じハードウェアへ触れる並行比較は行わない。daemon内部のLockTableはdirectプロセスを仲裁できず、UARTで実害が発生したほか、GPIO/DHT22にも同じ構造的リスクがあるため
+- 本番がdirectの期間、`scripts/canary_compare.py`を使う場合はセンサーハードウェアを一切開かない受動診断として動作させる。全センサー値は本番journalから取得し、pi4gpiodはUnixソケットの応答性だけを監視する
+- `canary-compare.service`には`PrivateDevices=true`・`DevicePolicy=closed`・`ProtectKernelTunables=true`等を設定し、コードが後退してもGPIO/I2C/SPI/UARTへアクセスできないようOSレベルで強制する
+- 既存の`sensor-monitor.service`と監視対象が重複し、direct本番ではpi4gpiodを利用しないため、2026-07-21に実機の常駐カナリア・自動起動・CSVを撤去した。unitとスクリプトは保守時間帯の一時検証用テンプレートとしてのみ保持する
+- direct/pi4gpioの値比較は、本番を停止した保守時間帯、または本番自体がpi4gpioへ移行しdirectアクセスをOSレベルで禁止した後だけ実施する
 - ✅ センサー再接続後の実データ比較を実施（2026-07-13）。本番停止中の一時的な検証で全7センサーの実データ突き合わせが完了し、DHT22の重大バグを発見・修正した
-- ⚠️ `canary-compare.service`としての初期運用ではMH-Z19Cの二重読み取りが混入していた。UARTを一切開かない修正版は自動テストで固定し、2026-07-21にPiのリポジトリ配下へ配備した。カナリアはinactiveのままでサービス再起動は行っていない。旧CSVのUART比較値は競合の影響を受け得るため、移行判定の根拠から除外する
+- ⚠️ `canary-compare.service`としての初期運用ではMH-Z19Cの二重読み取りが混入していた。旧CSVのUART比較値は競合の影響を受け得るため、移行判定の根拠から除外する。完全受動版の短時間検証後、常駐カナリアと旧CSVは撤去済み
+
+本番のpi4gpio移行時は`systemd/sensor-tiered-client-pi4gpio-exclusive.conf`を
+drop-inとして適用し、対象サービスから物理デバイスを不可視化する。共有Pi全体の
+udev権限は変更せず、他プロジェクトへの影響を避ける。詳細は`EXCLUSIVE_ACCESS.md`。
 
 ## 7. 切り戻し手順
 
