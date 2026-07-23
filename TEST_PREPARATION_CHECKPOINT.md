@@ -25,6 +25,13 @@
 - 同一プロセスの再接続を古い接続と区別する接続単位`session_id`を追加
 - 明示Release、切断時全ハンドル、非所有者Release、同一PID再接続のRust回帰テストを追加
 - WindowsではLinux専用crateを実行できないため、aarch64向けall-target check/clippyで回帰テストのコンパイルを確認。Linuxでの実行はGitHub Actionsで確認する
+- GitHub Actions 3ジョブ成功。Ubuntu上のRust 9テスト、host build、aarch64クロスビルドが成功
+- Piの隔離ステージング`/home/pi/pi4gpio-fd-fix-ab94cd4`でもRust 9テストとreleaseビルドが成功
+- 旧daemonを`/usr/local/bin/pi4gpiod.before_fd_fix_ab94cd4`へ保存し、コミット`ab94cd4`の修正版を配備
+- 修正版でスモーク1周期と本試験60周期が全センサー成功。終了直後の対象デバイス保持者は0
+- daemon PID 67666を再起動せずdirectへ切り戻し、direct PID 68125だけがGPIO/I2C/SPI/UARTを保持することを確認
+- 受信SQLiteは12:00:35まで再開、保守停止による最大間隔689秒。自動復旧タイマーは削除済み
+- 機械可読結果を`baselines/pi4gpio_fd_fix_10min_20260723.json`へ保存
 - journal解析が指定時間より1時間多く失敗行を数える不具合を発見し、正確な指定時間へ修正して回帰テストを追加
 - 修正版解析スクリプトをPiへ配置し、ローカル／Pi SHA-256一致を確認
 
@@ -40,17 +47,17 @@
 
 ## 次の作業
 
-1. 修正をDraft PRへpushし、Linux GitHub ActionsでRust単体テストを実行する
-2. CI成功後、修正版daemonを実機用一時パスへ配備してバイナリと設定を検証する
-3. 保守時間帯に自動復旧タイマーを設定し、60周期試験と「daemon再起動なしのdirect切り戻し」を再検証する
-4. 実機合格までは、Pi4gpio試験後にdaemonを再起動してFD解放を確認してからdirectを開始する
+1. 実機合格結果をDraft PRへ追加し、CIを再確認する
+2. week09をPi4gpioバックエンドへ切り替えるdrop-inと事前ロールバック手順を最終レビューする
+3. 次の保守時間帯に段階移行し、短時間監視後に連続運転へ移行する
+4. 連続運転が安定するまで旧daemonバックアップとdirect切り戻し手順を保持する
 
 ## GitHub側の状態
 
 - `gh auth status`はユーザー`kazuki1729`で正常
 - `agent/prepare-pi4gpio-testing`をoriginへpush済み
 - Draft Pull Request #2: https://github.com/kazuki1729/pi4gpio/pull/2
-- 正式24時間基準と初回実機試験は完了。残留FD修正はローカル実装済みだが実機再試験前のため、Draftを維持する
+- 正式24時間基準、初回実機試験、残留FD修正、daemon無再起動切り戻し再試験まで完了。week09本番のPi4gpio連続運転前のため、Draftを維持する
 
 ## 変更してはいけないもの
 

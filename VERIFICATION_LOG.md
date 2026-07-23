@@ -594,3 +594,23 @@ sensor-serverは2026-07-22 15:41:56 JSTに起動しているが、この24時間
 - GPIOはピン単位操作で共有する`/dev/gpiomem`マッピングのため、今回のキャッシュclose対象は実機で残留を確認したI2C/SPI/UARTに限定
 
 追加したRust回帰テストは、明示Release時のdrop、切断時3種全ハンドルdrop、非所有者Release拒否、同一PID別セッションの排他を検証する。WindowsホストではLinux専用APIを含むためネイティブ`cargo test`は不適用だが、`aarch64-unknown-linux-gnu`向け`cargo check --workspace --all-targets`とClippy `-D warnings`でテストを含む全ターゲットのコンパイルに成功した。運用Python 18件、クライアント回復6件も成功。LinuxでのRustテスト実行と実機FD解放試験は未実施のため、本番移行ブロックは維持する。
+
+## 2026-07-23: 残留FD修正版の実機再試験
+
+GitHub Actions 3ジョブが成功し、Ubuntu上でRust 9テスト、host build、aarch64クロスビルドを確認した。コミット`ab94cd4`をGitアーカイブ化してPiの隔離パス`/home/pi/pi4gpio-fd-fix-ab94cd4`へ転送し、SHA-256一致後にPiネイティブでもRust 9テストとreleaseビルドを実行した。
+
+現行`/usr/local/bin/pi4gpiod`は`/usr/local/bin/pi4gpiod.before_fd_fix_ab94cd4`へ保存した。旧SHA-256は`ab058837...e3bc1a38`、修正版は`ce12a505...8c411d7`。direct PID 65662を動かしたままpi4gpio.serviceだけを更新し、修正版daemon PID 67666・`NRestarts=0`、direct無再起動、対象デバイスはdirectだけが保持することを確認した。
+
+20分後にdirectを自動再開する一時タイマーを設定してからdirectを停止し、対象デバイス保持者0を確認した。
+
+- スモーク1周期: 全項目成功、143.813ms、クライアント終了後の対象デバイス保持者0
+- 本試験60周期: 全項目60/60成功、再接続0、period overrun 0
+- 開始間隔平均9.999秒、最小7.956秒、最大12.046秒。DHT22の2.047秒リトライ周期を前後で補正した結果で、60周期全体の開始時刻差は589.930秒
+- 周期処理時間平均212.367ms、最大2170.194ms
+- FD数6固定、RSS 16,532～16,680KiB、daemon PID 67666・`NRestarts=0`で不変
+- 本試験終了後、daemonを再起動せず対象デバイス保持者0を確認
+- directを開始し、新PID 68125だけが`/dev/gpiochip0`、`/dev/i2c-1`、`/dev/spidev0.0`、`/dev/ttyS0`を保持。daemon PID 67666は保持なし
+- 自動復旧timer/serviceは`not-found/inactive`まで解除
+- sensor-server PID 223299・`NRestarts=0`。SQLiteは11:57:05から10秒周期で再開し、12:00:35まで確認。保守停止を含む最大間隔689秒
+
+これにより、残留FD修正とdaemon再起動なしのdirect切り戻し受入条件は合格した。機械可読結果は`baselines/pi4gpio_fd_fix_10min_20260723.json`に保存した。week09本番は引き続きdirect・10秒周期で稼働しており、次はPi4gpioバックエンドへの段階移行と連続運転である。

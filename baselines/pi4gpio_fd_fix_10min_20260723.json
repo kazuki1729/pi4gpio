@@ -1,0 +1,100 @@
+{
+  "captured_at": "2026-07-23T12:00:35+09:00",
+  "source_commit": "ab94cd4",
+  "deployment": {
+    "staging_path": "/home/pi/pi4gpio-fd-fix-ab94cd4",
+    "previous_daemon_sha256": "ab058837721521273c0815a41c55e09b108dfdabb63d98deb1781d54e3bc1a38",
+    "fixed_daemon_sha256": "ce12a50576cefaf96bd7b217afc3d6c6b2022d845f875c6dd4a59e61d8c411d7",
+    "backup_path": "/usr/local/bin/pi4gpiod.before_fd_fix_ab94cd4",
+    "daemon_pid": 67666,
+    "daemon_restarts": 0,
+    "direct_pid_before_maintenance": 65662,
+    "direct_pid_after_maintenance": 68125
+  },
+  "validation": {
+    "github_actions_jobs_passed": 3,
+    "linux_rust_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "raspberry_pi_native_rust_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "raspberry_pi_release_build": "pass"
+  },
+  "smoke": {
+    "cycles": 1,
+    "all_sensors_ok": true,
+    "cycle_duration_ms": 143.813,
+    "period_overruns": 0,
+    "device_holders_after_client_exit": []
+  },
+  "primary_run": {
+    "start": "2026-07-23T11:46:19.378813+09:00",
+    "end": "2026-07-23T11:56:09.308476+09:00",
+    "cycles": 60,
+    "start_interval_sec": {
+      "minimum": 7.956,
+      "maximum": 12.046,
+      "average": 9.999
+    },
+    "cycle_duration_ms": {
+      "minimum": 143.052,
+      "maximum": 2170.194,
+      "average": 212.367
+    },
+    "period_overruns": 0,
+    "daemon_pids": [67666],
+    "daemon_restarts": [0],
+    "process": {
+      "fd_minimum": 6,
+      "fd_maximum": 6,
+      "rss_kib_minimum": 16532,
+      "rss_kib_maximum": 16680,
+      "rss_kib_average": 16625.7
+    },
+    "sensors": {
+      "light": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 0.929, "latency_ms_maximum": 1.364},
+      "sound": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 0.311, "latency_ms_maximum": 0.484},
+      "joystick": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 0.61, "latency_ms_maximum": 1.031},
+      "potentiometer": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 0.296, "latency_ms_maximum": 0.528},
+      "button": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 0.222, "latency_ms_maximum": 0.372},
+      "dht22": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 90.273, "latency_ms_maximum": 2046.773},
+      "bme280": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 18.86, "latency_ms_maximum": 21.748},
+      "mh_z19c": {"ok": 60, "failed": 0, "reconnected": 0, "latency_ms_average": 100.741, "latency_ms_maximum": 101.156}
+    },
+    "value_ranges": {
+      "dht22_temp": {"minimum": 31.6, "maximum": 31.7},
+      "dht22_humidity": {"minimum": 65.3, "maximum": 66.1},
+      "pressure": {"minimum": 1007.472, "maximum": 1007.661},
+      "co2": {"minimum": 400, "maximum": 404}
+    }
+  },
+  "rollback": {
+    "daemon_restarted_between_test_and_direct": false,
+    "daemon_pid_before_and_after": 67666,
+    "device_holders_after_client_exit": [],
+    "device_holders_after_direct_start": {
+      "/dev/gpiochip0": [68125],
+      "/dev/i2c-1": [68125],
+      "/dev/spidev0.0": [68125],
+      "/dev/ttyS0": [68125]
+    },
+    "direct_service_active": true,
+    "daemon_service_active": true,
+    "temporary_rollback_timer_removed": true,
+    "receiver_service_pid": 223299,
+    "receiver_service_restarts": 0,
+    "latest_database_timestamp": "2026-07-23 12:00:35",
+    "maintenance_gap_sec": 689
+  },
+  "result": {
+    "sensor_functionality": "pass",
+    "ten_minute_stability": "pass",
+    "cached_handle_cleanup": "pass",
+    "rollback_without_daemon_restart": "pass",
+    "production_recovery": "pass",
+    "overall": "pass_for_fd_cleanup_phase"
+  }
+}
