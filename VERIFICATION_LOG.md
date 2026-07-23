@@ -548,3 +548,36 @@ UARTだけでなく、GPIOボタンとDHT22も本番directとpi4gpioカナリア
 - 現行directクライアントは取得処理時間を記録しないため、処理時間比較はPi4gpio試験側の参考値だけになる
 
 sensor-serverは2026-07-22 15:41:56 JSTに起動しているが、この24時間窓の最大周期は11秒でデータ中断はない。取得後も3サービスのPID・状態・`NRestarts`は実行前と一致した。機械可読結果は`baselines/direct_24h_20260723.json`に保存した。
+
+## 2026-07-23: 初回Pi4gpio実機ハードウェア試験
+
+### 安全条件
+
+- week09 PID 1253だけがGPIO/I2C/SPI/UARTを保持していることを事前確認
+- 20分後にweek09を自動再開する一時systemdタイマーを設定してから、本番クライアントだけを停止
+- week09が`inactive/dead`、対象デバイス保持者0、pi4gpiod PID 967・`NRestarts=0`を確認してから実行
+- 隔離venvの`rpi-sensor-lib==0.2.0`、`pi4gpio-client==0.1.0`とランナーSHA-256一致を確認
+- 試験結果はPiローカルJSONLだけへ保存し、本番サーバーへ送信していない
+- 5秒周期、障害注入、drop-in適用は実施していない
+
+### 結果
+
+- スモーク1周期: 全項目成功、全体143.755ms、overrunなし
+- 既定60秒上限による予備7周期: 全項目成功、overrunなし
+- 本試験: `--duration 700 --cycles 60 --interval 10`、60/60周期完了
+- light/sound/joystick/potentiometer/button/DHT22/BME280/MH-Z19Cは全て60/60成功、再接続0
+- 導出した周期開始間隔は9.912～10.115秒、平均10.0秒、period overrun 0
+- 周期処理時間は平均313.563ms、最大8235.458ms。DHT22がcycle 3で8114.69ms、cycle 59で2046.001msかかったが、どちらも成功し10秒以内
+- BME280平均19.151ms、MH-Z19C平均100.729ms
+- FD数は全周期6で固定。RSSは16,544～16,696KiB、daemon PID 967・`NRestarts=0`で不変
+- 値域はDHT22 31.1～31.2℃／64.7～65.9%、気圧1007.658～1007.870hPa、CO2 400～404ppmでdirect基準範囲内
+
+### 切り戻し時に発見した問題
+
+60周期終了後にweek09を開始すると、direct PID 65539に加えてpi4gpiod PID 967も`/dev/i2c-1`、`/dev/spidev0.0`、`/dev/ttyS0`を保持していた。二重保持を継続させず、直ちにweek09を再停止した。
+
+原因は`socket.rs`のdaemon全体`HashMap`がI2C/SPI/UARTオブジェクトを初回open後にキャッシュし、Release／切断cleanupが`LockTable`だけを解放して実ハンドルをremove/dropしない構造である。
+
+競合解消中の接続断に備えて新しい10分自動復帰タイマーを設定し、direct停止中にpi4gpiodを再起動した。対象デバイス保持者0を確認してからweek09を開始し、最終的にdirect PID 65662だけが対象デバイスを保持、pi4gpiod PID 65616は残留FDなしとなった。両一時タイマーは解除済み。SQLiteの最新時刻は11:09:55、保守停止を含む最大間隔は794秒で、送信再開を確認した。
+
+機能試験と10分安定性は合格だが、単純なdirect切り戻しは不合格。本番移行は、キャッシュ済みハンドルをRelease／切断時にcloseする修正と、daemon再起動なしの切り戻し再試験が完了するまで保留する。機械可読結果は`baselines/pi4gpio_initial_10min_20260723.json`に保存した。

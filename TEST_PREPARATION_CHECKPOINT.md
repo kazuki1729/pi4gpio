@@ -17,6 +17,10 @@
 - week09ローカル版へ`SENSOR_SEND_INTERVAL_SEC`を追加。既定10秒、5秒指定可能、monotonic周期、超過周期の重複実行防止を実装
 - 実機week09には周期変更を未配備。現在も10秒direct運転
 - DBとjournalの両方から正式24時間direct基準値を取得し、`baselines/direct_24h_20260723.json`へ保存
+- 初回Pi4gpio実機試験を隔離状態で実施。スモーク1周期、予備7周期、本試験60周期の全取得に成功
+- 本試験は全センサー60/60成功、開始周期平均10.0秒、overrun 0、FD 6固定、daemon再起動0
+- 切り戻し時、クライアント終了後もpi4gpiodがI2C/SPI/UARTのFDを保持する問題を検出。daemon再起動で解放し、direct本番へ正常復帰
+- 機械可読結果を`baselines/pi4gpio_initial_10min_20260723.json`へ保存
 - journal解析が指定時間より1時間多く失敗行を数える不具合を発見し、正確な指定時間へ修正して回帰テストを追加
 - 修正版解析スクリプトをPiへ配置し、ローカル／Pi SHA-256一致を確認
 
@@ -32,16 +36,17 @@
 
 ## 次の作業
 
-1. Pull Request #2の差分とGitHub Actionsを確認する
-2. week09を停止できる保守時間帯を決め、隔離したPi4gpio実機試験を実施する
-3. direct基準とPi4gpio試験の成功率・周期・値域・処理時間を比較する
+1. クライアントRelease／切断時にI2C/SPI/UARTのキャッシュ済みハンドルもcloseするdaemon修正を設計・実装する
+2. 切断cleanupと非所有者Releaseの回帰テストを追加する
+3. 修正版daemonを保守時間帯に配備し、60周期試験と「daemon再起動なしのdirect切り戻し」を再検証する
+4. 修正完了までは、Pi4gpio試験後にdaemonを再起動してFD解放を確認してからdirectを開始する
 
 ## GitHub側の状態
 
 - `gh auth status`はユーザー`kazuki1729`で正常
 - `agent/prepare-pi4gpio-testing`をoriginへpush済み
 - Draft Pull Request #2: https://github.com/kazuki1729/pi4gpio/pull/2
-- 正式24時間基準は完了。実機ハードウェア試験は未完了のため、Draftを維持する
+- 正式24時間基準と初回実機試験は完了。切り戻し時の残留FD問題が未修正のため、Draftを維持する
 
 ## 変更してはいけないもの
 
@@ -50,4 +55,4 @@
 - 現在のdirectバックエンドと10秒周期
 - activeなweek09／pi4gpiodの停止・再起動
 
-実機ハードウェア操作は一度も実行していない。
+2026-07-23の実機試験はweek09停止・対象デバイス保持者0を確認した隔離状態でのみ実行した。
