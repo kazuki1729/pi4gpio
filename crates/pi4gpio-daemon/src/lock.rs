@@ -44,10 +44,20 @@ impl LockTable {
         }
     }
 
-    pub fn release(&self, bus: BusId, client: &ClientId) {
+    /// 所有者だけがロックを解放できる。`before_unlock`は所有者確認後、ロックを
+    /// 他クライアントへ明け渡す前に実行する。ハードウェアハンドルのdropをここで
+    /// 行うことで、次クライアントが古いFDを再利用する競合窓を作らない。
+    pub fn release_with<F>(&self, bus: BusId, client: &ClientId, before_unlock: F) -> bool
+    where
+        F: FnOnce(),
+    {
         let mut holders = self.holders.lock().expect("lock table poisoned");
         if holders.get(&bus) == Some(client) {
+            before_unlock();
             holders.remove(&bus);
+            true
+        } else {
+            false
         }
     }
 }
@@ -57,7 +67,19 @@ mod tests {
     use super::*;
 
     fn client(pid: u32) -> ClientId {
-        ClientId::Local { uid: 1000, pid }
+        ClientId::Local {
+            uid: 1000,
+            pid,
+            session_id: pid as u64,
+        }
+    }
+
+    fn session(pid: u32, session_id: u64) -> ClientId {
+        ClientId::Local {
+            uid: 1000,
+            pid,
+            session_id,
+        }
     }
 
     #[test]
@@ -89,7 +111,36 @@ mod tests {
         let bus = BusId::Gpio(17);
 
         assert_eq!(locks.try_acquire(bus, owner.clone()), Ok(()));
-        locks.release(bus, &contender);
+        assert!(!locks.release_with(bus, &contender, || {}));
+        assert_eq!(locks.try_acquire(bus, contender), Err(owner));
+    }
+
+    #[test]
+    fn reconnect_from_same_process_is_a_distinct_lock_owner() {
+        let locks = LockTable::new();
+        let old_session = session(10, 1);
+        let new_session = session(10, 2);
+        let bus = BusId::Uart(0);
+
+        assert_eq!(locks.try_acquire(bus, old_session.clone()), Ok(()));
+        assert_eq!(
+            locks.try_acquire(bus, new_session),
+            Err(old_session.clone())
+        );
+        assert!(locks.release_with(bus, &old_session, || {}));
+    }
+
+    #[test]
+    fn non_owner_release_does_not_run_cleanup() {
+        let locks = LockTable::new();
+        let owner = client(10);
+        let contender = client(20);
+        let bus = BusId::I2c(1);
+        let mut cleanup_ran = false;
+
+        assert_eq!(locks.try_acquire(bus, owner.clone()), Ok(()));
+        assert!(!locks.release_with(bus, &contender, || cleanup_ran = true));
+        assert!(!cleanup_ran);
         assert_eq!(locks.try_acquire(bus, contender), Err(owner));
     }
 
@@ -105,7 +156,7 @@ mod tests {
         }
         // socket.rsの切断処理と同じく、接続が追跡していた全BusIdを解放する。
         for bus in held {
-            locks.release(bus, &disconnected);
+            assert!(locks.release_with(bus, &disconnected, || {}));
         }
         for bus in held {
             assert_eq!(locks.try_acquire(bus, next_client.clone()), Ok(()));

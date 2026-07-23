@@ -21,6 +21,10 @@
 - 本試験は全センサー60/60成功、開始周期平均10.0秒、overrun 0、FD 6固定、daemon再起動0
 - 切り戻し時、クライアント終了後もpi4gpiodがI2C/SPI/UARTのFDを保持する問題を検出。daemon再起動で解放し、direct本番へ正常復帰
 - 機械可読結果を`baselines/pi4gpio_initial_10min_20260723.json`へ保存
+- daemonのRelease／切断cleanupで、所有者確認中にI2C/SPI/UARTキャッシュをremove/dropしてからロックを解放する修正を実装
+- 同一プロセスの再接続を古い接続と区別する接続単位`session_id`を追加
+- 明示Release、切断時全ハンドル、非所有者Release、同一PID再接続のRust回帰テストを追加
+- WindowsではLinux専用crateを実行できないため、aarch64向けall-target check/clippyで回帰テストのコンパイルを確認。Linuxでの実行はGitHub Actionsで確認する
 - journal解析が指定時間より1時間多く失敗行を数える不具合を発見し、正確な指定時間へ修正して回帰テストを追加
 - 修正版解析スクリプトをPiへ配置し、ローカル／Pi SHA-256一致を確認
 
@@ -36,17 +40,17 @@
 
 ## 次の作業
 
-1. クライアントRelease／切断時にI2C/SPI/UARTのキャッシュ済みハンドルもcloseするdaemon修正を設計・実装する
-2. 切断cleanupと非所有者Releaseの回帰テストを追加する
-3. 修正版daemonを保守時間帯に配備し、60周期試験と「daemon再起動なしのdirect切り戻し」を再検証する
-4. 修正完了までは、Pi4gpio試験後にdaemonを再起動してFD解放を確認してからdirectを開始する
+1. 修正をDraft PRへpushし、Linux GitHub ActionsでRust単体テストを実行する
+2. CI成功後、修正版daemonを実機用一時パスへ配備してバイナリと設定を検証する
+3. 保守時間帯に自動復旧タイマーを設定し、60周期試験と「daemon再起動なしのdirect切り戻し」を再検証する
+4. 実機合格までは、Pi4gpio試験後にdaemonを再起動してFD解放を確認してからdirectを開始する
 
 ## GitHub側の状態
 
 - `gh auth status`はユーザー`kazuki1729`で正常
 - `agent/prepare-pi4gpio-testing`をoriginへpush済み
 - Draft Pull Request #2: https://github.com/kazuki1729/pi4gpio/pull/2
-- 正式24時間基準と初回実機試験は完了。切り戻し時の残留FD問題が未修正のため、Draftを維持する
+- 正式24時間基準と初回実機試験は完了。残留FD修正はローカル実装済みだが実機再試験前のため、Draftを維持する
 
 ## 変更してはいけないもの
 

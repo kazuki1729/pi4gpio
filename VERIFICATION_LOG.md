@@ -581,3 +581,16 @@ sensor-serverは2026-07-22 15:41:56 JSTに起動しているが、この24時間
 競合解消中の接続断に備えて新しい10分自動復帰タイマーを設定し、direct停止中にpi4gpiodを再起動した。対象デバイス保持者0を確認してからweek09を開始し、最終的にdirect PID 65662だけが対象デバイスを保持、pi4gpiod PID 65616は残留FDなしとなった。両一時タイマーは解除済み。SQLiteの最新時刻は11:09:55、保守停止を含む最大間隔は794秒で、送信再開を確認した。
 
 機能試験と10分安定性は合格だが、単純なdirect切り戻しは不合格。本番移行は、キャッシュ済みハンドルをRelease／切断時にcloseする修正と、daemon再起動なしの切り戻し再試験が完了するまで保留する。機械可読結果は`baselines/pi4gpio_initial_10min_20260723.json`に保存した。
+
+## 2026-07-23: 残留FDの恒久修正（ローカル実装）
+
+初回実機試験で確認したI2C/SPI/UART残留FDに対し、daemonのハンドル寿命とロック所有権を修正した。
+
+- 遅延openしたI2C/SPI/UARTを`PeripheralHandles`へ集約し、BusIdに対応する要素をremove/dropできる構造へ変更
+- `LockTable::release_with`で所有者を確認し、ハンドルdrop完了後にロックを削除する。次所有者が取得した後に古いFDをcloseする競合窓を防止
+- 明示`Release`と正常／異常切断cleanupを同じ`release_owned_bus`へ統一
+- 非所有者の`Release`はハンドルをdropせず、既存所有者のロックも維持
+- `SO_PEERCRED`のUID/PIDにdaemon内接続`session_id`を加え、同一プロセスの再接続を別所有者として扱う。古いセッションのcleanupが新セッションを解放する経路を遮断
+- GPIOはピン単位操作で共有する`/dev/gpiomem`マッピングのため、今回のキャッシュclose対象は実機で残留を確認したI2C/SPI/UARTに限定
+
+追加したRust回帰テストは、明示Release時のdrop、切断時3種全ハンドルdrop、非所有者Release拒否、同一PID別セッションの排他を検証する。WindowsホストではLinux専用APIを含むためネイティブ`cargo test`は不適用だが、`aarch64-unknown-linux-gnu`向け`cargo check --workspace --all-targets`とClippy `-D warnings`でテストを含む全ターゲットのコンパイルに成功した。運用Python 18件、クライアント回復6件も成功。LinuxでのRustテスト実行と実機FD解放試験は未実施のため、本番移行ブロックは維持する。
