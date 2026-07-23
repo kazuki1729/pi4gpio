@@ -1,0 +1,105 @@
+{
+  "captured_at": "2026-07-23T11:09:59+09:00",
+  "backend": "pi4gpio",
+  "test_scope": {
+    "production_service_stopped": true,
+    "production_payloads_sent_by_test": 0,
+    "fault_injection": false,
+    "interval_sec": 10.0,
+    "smoke_cycles": 1,
+    "preliminary_cycles": 7,
+    "primary_cycles": 60
+  },
+  "smoke": {
+    "timestamp": "2026-07-23T10:54:10.751135+09:00",
+    "all_sensors_ok": true,
+    "cycle_duration_ms": 143.755,
+    "period_overrun": false,
+    "daemon_pid": 967,
+    "daemon_restarts": 0
+  },
+  "preliminary_run": {
+    "start": "2026-07-23T10:54:54.663113+09:00",
+    "end": "2026-07-23T10:55:54.592719+09:00",
+    "cycles": 7,
+    "sensor_failures": 0,
+    "period_overruns": 0,
+    "ended_by_default_duration_sec": 60
+  },
+  "primary_run": {
+    "start": "2026-07-23T10:56:32.295467+09:00",
+    "end": "2026-07-23T11:06:22.257979+09:00",
+    "cycles": 60,
+    "derived_cycle_start_interval_sec": {
+      "minimum": 9.912,
+      "maximum": 10.115,
+      "average": 10.0
+    },
+    "completion_interval_sec": {
+      "minimum": 2.0,
+      "maximum": 18.0,
+      "average": 10.0
+    },
+    "cycle_duration_ms": {
+      "minimum": 120.892,
+      "maximum": 8235.458,
+      "average": 313.563
+    },
+    "period_overruns": 0,
+    "daemon_pids": [967],
+    "daemon_restarts": [0],
+    "process": {
+      "fd_minimum": 6,
+      "fd_maximum": 6,
+      "rss_kib_minimum": 16544,
+      "rss_kib_maximum": 16696,
+      "rss_kib_average": 16638.7
+    },
+    "sensors": {
+      "light": {"ok": 60, "failed": 0, "latency_ms_average": 0.973, "latency_ms_maximum": 3.695},
+      "sound": {"ok": 60, "failed": 0, "latency_ms_average": 0.306, "latency_ms_maximum": 0.527},
+      "joystick": {"ok": 60, "failed": 0, "latency_ms_average": 0.602, "latency_ms_maximum": 1.064},
+      "potentiometer": {"ok": 60, "failed": 0, "latency_ms_average": 0.29, "latency_ms_maximum": 0.499},
+      "button": {"ok": 60, "failed": 0, "latency_ms_average": 0.226, "latency_ms_maximum": 0.415},
+      "dht22": {"ok": 60, "failed": 0, "latency_ms_average": 191.158, "latency_ms_maximum": 8114.69},
+      "bme280": {"ok": 60, "failed": 0, "latency_ms_average": 19.151, "latency_ms_maximum": 25.272},
+      "mh_z19c": {"ok": 60, "failed": 0, "latency_ms_average": 100.729, "latency_ms_maximum": 101.079}
+    },
+    "slow_dht22_cycles": [
+      {"cycle": 3, "latency_ms": 8114.69, "ok": true},
+      {"cycle": 59, "latency_ms": 2046.001, "ok": true}
+    ],
+    "value_ranges": {
+      "dht22_temp": {"minimum": 31.1, "maximum": 31.2},
+      "dht22_humidity": {"minimum": 64.7, "maximum": 65.9},
+      "pressure": {"minimum": 1007.658, "maximum": 1007.87},
+      "co2": {"minimum": 400, "maximum": 404}
+    }
+  },
+  "rollback": {
+    "simple_direct_restart_safe": false,
+    "observed_problem": "pi4gpiod retained I2C, SPI, and UART file descriptors after the final client disconnected",
+    "first_direct_restart_pid": 65539,
+    "conflicting_daemon_pid": 967,
+    "mitigation": [
+      "stopped sensor-tiered-client.service",
+      "restarted pi4gpio.service while direct production was inactive",
+      "verified target device holders were empty",
+      "started sensor-tiered-client.service",
+      "verified only the direct production PID held target devices"
+    ],
+    "recovered_daemon_pid": 65616,
+    "recovered_direct_pid": 65662,
+    "recovered_successfully": true,
+    "production_database_max_interval_sec": 794,
+    "latest_database_timestamp_after_recovery": "2026-07-23 11:09:55",
+    "temporary_rollback_timers_removed": true
+  },
+  "result": {
+    "sensor_functionality": "pass",
+    "ten_minute_stability": "pass",
+    "simple_rollback": "fail",
+    "overall": "blocked_before_production_migration",
+    "required_next_action": "close cached hardware handles when a client releases or disconnects, then repeat the rollback test"
+  }
+}

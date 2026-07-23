@@ -1,5 +1,5 @@
 [Unit]
-Description=pi4gpio safe canary comparison (no UART hardware access)
+Description=pi4gpio passive health canary (zero sensor hardware access)
 After=network.target pi4gpio.service sensor-tiered-client.service
 Wants=pi4gpio.service
 
@@ -7,11 +7,17 @@ Wants=pi4gpio.service
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/pi4gpio/scripts
-# 本番venv(lgpio/spidev/smbus2/pyserial/RPi.bme280導入済み)のPythonを使う。
-# rpi_sensorsは二重モード対応版(~/rpi-sensor-lib-canary)を使い、本番の
-# site-packages(二重モード化前の0.1.0)には一切触れない。
-# MH-Z19C/UARTは本番ログの値だけを記録し、カナリアからはアクセスしない。
-ExecStart=/home/pi/sensor-tiered-store/.venv/bin/python3 canary_compare.py --interval 30 --output /home/pi/pi4gpio/scripts/canary_log.csv
+# センサー値は本番journalから取得し、daemonは不正要求への応答だけを確認する。
+# PrivateDevicesとDevicePolicyでGPIO/I2C/SPI/UARTをOSレベルでも不可視にする。
+ExecStart=/usr/bin/python3 canary_compare.py --require-private-devices --interval 30 --output /home/pi/pi4gpio/scripts/canary_log_passive.csv
+PrivateDevices=true
+DevicePolicy=closed
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
 Restart=on-failure
 RestartSec=5
 

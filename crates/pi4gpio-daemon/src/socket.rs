@@ -33,14 +33,58 @@ type SpiDevices = HashMap<(u8, u8), SpiDevice>;
 /// `/dev/ttyS{port}`に対応する（daemon側の命名規約）。
 type UartPorts = HashMap<u8, UartPort>;
 
+/// 遅延openしたデバイスハンドルのキャッシュ。値型をジェネリックにしているのは、
+/// 実デバイスなしの単体テストでもdropを検証できるようにするため。
+struct PeripheralHandles<I, S, U> {
+    i2c: Mutex<HashMap<u8, I>>,
+    spi: Mutex<HashMap<(u8, u8), S>>,
+    uart: Mutex<HashMap<u8, U>>,
+}
+
+impl<I, S, U> Default for PeripheralHandles<I, S, U> {
+    fn default() -> Self {
+        Self {
+            i2c: Mutex::new(HashMap::new()),
+            spi: Mutex::new(HashMap::new()),
+            uart: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<I, S, U> PeripheralHandles<I, S, U> {
+    /// 対応するキャッシュ要素をremoveし、その場でdropする。GPIOはdaemonの
+    /// `/dev/gpiomem`マッピングを共有するため、ピン単位Releaseの対象外。
+    fn close(&self, bus: BusId) -> bool {
+        match bus {
+            BusId::Gpio(_) => false,
+            BusId::I2c(bus) => self
+                .i2c
+                .lock()
+                .expect("i2c mutex poisoned")
+                .remove(&bus)
+                .is_some(),
+            BusId::Spi(bus, chip_select) => self
+                .spi
+                .lock()
+                .expect("spi mutex poisoned")
+                .remove(&(bus, chip_select))
+                .is_some(),
+            BusId::Uart(port) => self
+                .uart
+                .lock()
+                .expect("uart mutex poisoned")
+                .remove(&port)
+                .is_some(),
+        }
+    }
+}
+
 /// 各バス種別のハードウェア状態をまとめて保持する。ハンドラ関数の引数が
 /// バス種別の数だけ増え続けるのを避けるための1つの塊として扱う。
 struct Peripherals {
     locks: LockTable,
     gpio: Mutex<GpioChip>,
-    i2c: Mutex<I2cBuses>,
-    spi: Mutex<SpiDevices>,
-    uart: Mutex<UartPorts>,
+    handles: PeripheralHandles<I2cBus, SpiDevice, UartPort>,
 }
 
 pub async fn serve(config: &Config) -> io::Result<()> {
@@ -55,9 +99,7 @@ pub async fn serve(config: &Config) -> io::Result<()> {
     let peripherals = Arc::new(Peripherals {
         locks: LockTable::new(),
         gpio: Mutex::new(GpioChip::open().map_err(|e| io::Error::other(e.to_string()))?),
-        i2c: Mutex::new(HashMap::new()),
-        spi: Mutex::new(HashMap::new()),
-        uart: Mutex::new(HashMap::new()),
+        handles: PeripheralHandles::default(),
     });
     let mut sigterm = signal(SignalKind::terminate())?;
 
@@ -102,8 +144,15 @@ async fn handle_client(stream: UnixStream, peripherals: Arc<Peripherals>) -> io:
     // このブロック自体がスキップされることがあり、通信エラーで切断した
     // クライアントのロックが解放されないまま残ってしまうバグがあった
     // （実機検証で発見、VERIFICATION_LOG.md参照）。
-    for bus in held_buses.drain() {
-        peripherals.locks.release(bus, &client_id);
+    let buses: Vec<_> = held_buses.iter().copied().collect();
+    for bus in buses {
+        release_owned_bus(
+            &peripherals.locks,
+            &peripherals.handles,
+            &client_id,
+            &mut held_buses,
+            bus,
+        );
     }
     println!("pi4gpiod: client disconnected ({client_id:?})");
     result
@@ -162,8 +211,13 @@ fn dispatch(
     let bus: BusId = (&request.bus).into();
 
     if matches!(request.op, Operation::Release) {
-        peripherals.locks.release(bus, client_id);
-        held_buses.remove(&bus);
+        release_owned_bus(
+            &peripherals.locks,
+            &peripherals.handles,
+            client_id,
+            held_buses,
+            bus,
+        );
         return Response::ok();
     }
 
@@ -178,14 +232,32 @@ fn dispatch(
 
     match &request.bus {
         BusRef::Gpio { pin } => handle_gpio(*pin, &request.op, &peripherals.gpio),
-        BusRef::I2c { bus, addr } => handle_i2c(*bus, *addr, &request.op, &peripherals.i2c),
+        BusRef::I2c { bus, addr } => handle_i2c(*bus, *addr, &request.op, &peripherals.handles.i2c),
         BusRef::Spi { bus, chip_select } => {
-            handle_spi(*bus, *chip_select, &request.op, &peripherals.spi)
+            handle_spi(*bus, *chip_select, &request.op, &peripherals.handles.spi)
         }
         BusRef::Uart { port, baud_rate } => {
-            handle_uart(*port, *baud_rate, &request.op, &peripherals.uart)
+            handle_uart(*port, *baud_rate, &request.op, &peripherals.handles.uart)
         }
     }
+}
+
+/// セッションが実際に保持しているバスだけを解放する。`LockTable`が所有者を
+/// 再確認した状態でキャッシュをdropし、その後にロックを削除するため、非所有者の
+/// Releaseや次クライアントとの競合で使用中FDを閉じることはない。
+fn release_owned_bus<I, S, U>(
+    locks: &LockTable,
+    handles: &PeripheralHandles<I, S, U>,
+    client_id: &ClientId,
+    held_buses: &mut HashSet<BusId>,
+    bus: BusId,
+) -> bool {
+    if !held_buses.remove(&bus) {
+        return false;
+    }
+    locks.release_with(bus, client_id, || {
+        handles.close(bus);
+    })
 }
 
 fn pull_mode_from_wire(pull: PullWire) -> PullMode {
@@ -459,5 +531,123 @@ fn handle_uart(port: u8, baud_rate: u32, op: &Operation, uart: &Mutex<UartPorts>
             Response::malformed("uartバスにはこの操作は使えません")
         }
         Operation::Release => unreachable!("Releaseはdispatchの時点で処理済み"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct DropProbe(Arc<AtomicUsize>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn client(pid: u32, session_id: u64) -> ClientId {
+        ClientId::Local {
+            uid: 1000,
+            pid,
+            session_id,
+        }
+    }
+
+    #[test]
+    fn explicit_release_drops_handle_before_next_owner_acquires() {
+        let locks = LockTable::new();
+        let handles: PeripheralHandles<DropProbe, DropProbe, DropProbe> =
+            PeripheralHandles::default();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owner = client(10, 1);
+        let next = client(20, 2);
+        let bus = BusId::I2c(1);
+        let mut held = HashSet::from([bus]);
+
+        handles
+            .i2c
+            .lock()
+            .unwrap()
+            .insert(1, DropProbe(Arc::clone(&drops)));
+        assert_eq!(locks.try_acquire(bus, owner.clone()), Ok(()));
+        assert!(release_owned_bus(&locks, &handles, &owner, &mut held, bus));
+
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(held.is_empty());
+        assert!(handles.i2c.lock().unwrap().is_empty());
+        assert_eq!(locks.try_acquire(bus, next), Ok(()));
+    }
+
+    #[test]
+    fn disconnect_cleanup_drops_all_cached_bus_handles() {
+        let locks = LockTable::new();
+        let handles: PeripheralHandles<DropProbe, DropProbe, DropProbe> =
+            PeripheralHandles::default();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owner = client(10, 1);
+        let buses = [BusId::I2c(1), BusId::Spi(0, 0), BusId::Uart(0)];
+        let mut held = HashSet::from(buses);
+
+        handles
+            .i2c
+            .lock()
+            .unwrap()
+            .insert(1, DropProbe(Arc::clone(&drops)));
+        handles
+            .spi
+            .lock()
+            .unwrap()
+            .insert((0, 0), DropProbe(Arc::clone(&drops)));
+        handles
+            .uart
+            .lock()
+            .unwrap()
+            .insert(0, DropProbe(Arc::clone(&drops)));
+        for bus in buses {
+            assert_eq!(locks.try_acquire(bus, owner.clone()), Ok(()));
+        }
+
+        for bus in buses {
+            assert!(release_owned_bus(&locks, &handles, &owner, &mut held, bus));
+        }
+
+        assert_eq!(drops.load(Ordering::SeqCst), 3);
+        assert!(held.is_empty());
+        assert!(handles.i2c.lock().unwrap().is_empty());
+        assert!(handles.spi.lock().unwrap().is_empty());
+        assert!(handles.uart.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn non_owner_release_cannot_drop_cached_handle() {
+        let locks = LockTable::new();
+        let handles: PeripheralHandles<DropProbe, DropProbe, DropProbe> =
+            PeripheralHandles::default();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owner = client(10, 1);
+        let contender = client(20, 2);
+        let bus = BusId::Uart(0);
+        // 不整合なheld集合まで想定し、LockTable側の所有者確認も検証する。
+        let mut contender_held = HashSet::from([bus]);
+
+        handles
+            .uart
+            .lock()
+            .unwrap()
+            .insert(0, DropProbe(Arc::clone(&drops)));
+        assert_eq!(locks.try_acquire(bus, owner.clone()), Ok(()));
+        assert!(!release_owned_bus(
+            &locks,
+            &handles,
+            &contender,
+            &mut contender_held,
+            bus,
+        ));
+
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert!(handles.uart.lock().unwrap().contains_key(&0));
+        assert_eq!(locks.try_acquire(bus, contender), Err(owner));
     }
 }

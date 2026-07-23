@@ -1,0 +1,118 @@
+{
+  "captured_at": "2026-07-23T10:21:24+09:00",
+  "qualification": {
+    "requested_hours": 24.0,
+    "minimum_accepted_hours": 23.99,
+    "actual_hours": 23.999,
+    "qualified": true
+  },
+  "backend": "direct",
+  "journal": {
+    "window": {
+      "start": "2026-07-22 10:20:30",
+      "end": "2026-07-23 10:20:26",
+      "actual_hours": 23.999
+    },
+    "records": {
+      "total": 8636,
+      "timer": 8636,
+      "button": 0
+    },
+    "timer_interval_sec": {
+      "samples": 8635,
+      "average": 10.005,
+      "minimum": 10.0,
+      "maximum": 11.0,
+      "outside_10s_plus_minus_0_5s": 46
+    },
+    "sensor_valid_records": {
+      "light": 8636,
+      "sound": 8636,
+      "joystick": 8636,
+      "potentiometer": 8636,
+      "dht22": 8636,
+      "bme280": 8636,
+      "mh_z19c": 8636
+    },
+    "sensor_success_percent": {
+      "light": 100.0,
+      "sound": 100.0,
+      "joystick": 100.0,
+      "potentiometer": 100.0,
+      "dht22": 100.0,
+      "bme280": 100.0,
+      "mh_z19c": 100.0
+    },
+    "sensor_ranges": {
+      "dht22_temp": {"min": 28.1, "max": 32.5, "average": 30.238},
+      "dht22_humidity": {"min": 56.2, "max": 69.7, "average": 63.2},
+      "pressure": {"min": 1005.374, "max": 1008.71, "average": 1007.257},
+      "co2": {"min": 400.0, "max": 527.0, "average": 410.025}
+    },
+    "failures": {
+      "cycles_with_sensor_failure": 0,
+      "dht22_mentions": 0,
+      "bme280_mentions": 0,
+      "mh_z19c_mentions": 0,
+      "network_error_lines": 0
+    },
+    "acquisition_duration": "not_recorded_by_current_client"
+  },
+  "sqlite": {
+    "open_mode": "read_only_and_query_only",
+    "window": {
+      "start": "2026-07-22 10:21:20",
+      "end": "2026-07-23 10:21:16",
+      "actual_hours": 23.999
+    },
+    "records": {
+      "total": 8636,
+      "timer": 8636,
+      "button": 0
+    },
+    "timer_interval_sec": {
+      "samples": 8635,
+      "average": 10.005,
+      "minimum": 10,
+      "maximum": 11,
+      "outside_10s_plus_minus_0_5s": 46
+    },
+    "sensor_valid_records": {
+      "light": 8636,
+      "sound": 8636,
+      "joystick": 8636,
+      "potentiometer": 8636,
+      "dht22": 8636,
+      "bme280": 8636,
+      "mh_z19c": 8636
+    },
+    "sensor_ranges": {
+      "dht22_temp": {"min": 28.1, "max": 32.5, "average": 30.239},
+      "dht22_humidity": {"min": 56.2, "max": 69.7, "average": 63.198},
+      "pressure": {"min": 1005.374, "max": 1008.71, "average": 1007.257},
+      "co2": {"min": 400.0, "max": 527.0, "average": 410.026}
+    }
+  },
+  "cross_check": {
+    "record_counts_match": true,
+    "interval_statistics_match": true,
+    "valid_record_counts_match": true,
+    "range_differences_are_consistent_with_50_second_window_shift": true
+  },
+  "safety": {
+    "hardware_operations": 0,
+    "service_stop_or_restart_by_this_check": false,
+    "configuration_changes": 0,
+    "canary_state": "not-found/inactive",
+    "before": {
+      "sensor_tiered_client": {"pid": 1253, "nrestarts": 0, "state": "active/running"},
+      "pi4gpiod": {"pid": 967, "nrestarts": 0, "state": "active/running"},
+      "sensor_server": {"pid": 223299, "nrestarts": 0, "state": "active/running"}
+    },
+    "after": {
+      "sensor_tiered_client": {"pid": 1253, "nrestarts": 0, "state": "active/running"},
+      "pi4gpiod": {"pid": 967, "nrestarts": 0, "state": "active/running"},
+      "sensor_server": {"pid": 223299, "nrestarts": 0, "state": "active/running"}
+    }
+  }
+}

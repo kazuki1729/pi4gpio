@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-23T17:04:02+09:00",
+  "scope": "week09-v2-production-staged-cutover",
+  "parallel_ver3": {
+    "service": "sensor-v3-client.service",
+    "state_during_cutover": "inactive",
+    "files_or_service_modified": false
+  },
+  "cutover": {
+    "timestamp": "2026-07-23T17:00:16+09:00",
+    "service": "sensor-tiered-client.service",
+    "client_pid": 72845,
+    "backend": "pi4gpio",
+    "venv": "/home/pi/pi4gpio-week09-v2/.venv",
+    "restarts": 0,
+    "private_devices": true,
+    "device_policy": "closed",
+    "client_hardware_fd_count": 0,
+    "pending_payloads": 0
+  },
+  "server_observation": {
+    "destination": "buffalo-srv-cf:12345",
+    "interval_seconds": 10,
+    "first_observed_timestamp": "2026-07-23 17:01:16",
+    "last_observed_timestamp": "2026-07-23 17:03:56",
+    "all_sensor_fields_present": true
+  },
+  "daemon_restart_injection": {
+    "timestamp": "2026-07-23T17:03:16+09:00",
+    "daemon_pid_before": 67666,
+    "daemon_pid_after": 72941,
+    "client_pid_before": 72845,
+    "client_pid_after": 72845,
+    "client_reconnected_at": "2026-07-23T17:03:18+09:00",
+    "client_restarted": false,
+    "data_gap_detected": false,
+    "pending_payloads_after": 0
+  },
+  "rollback_guard": {
+    "scheduled_before_cutover": true,
+    "delay_minutes": 10,
+    "cancelled_after_acceptance": true,
+    "marker_removed": true
+  },
+  "final_state": {
+    "sensor_tiered_client": "enabled-active",
+    "pi4gpio": "enabled-active",
+    "sensor_v3_client": "inactive",
+    "sensor_tiered_client_restarts": 0,
+    "pi4gpio_restarts": 0
+  }
+}

@@ -40,8 +40,8 @@ pub enum BusRef {
         chip_select: u8,
     },
     /// `port`は`/dev/ttyS{port}`に対応する（daemon側の命名規約、
-    /// `socket.rs`参照）。`baud_rate`はそのポートの初回オープン時のみ有効
-    /// （I2C/SPIと同じく、以降は既に開いた接続を使い回す）。
+    /// `socket.rs`参照）。`baud_rate`はそのロック保持期間の初回オープン時に有効。
+    /// Releaseまたは切断時にポートをcloseし、次の所有者は指定値で開き直す。
     Uart {
         port: u8,
         baud_rate: u32,
