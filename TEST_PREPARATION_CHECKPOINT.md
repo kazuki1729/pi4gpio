@@ -1,6 +1,6 @@
 # Pi4gpioテスト事前準備チェックポイント
 
-最終更新: 2026-07-22
+最終更新: 2026-07-23
 作業ブランチ: `agent/prepare-pi4gpio-testing`
 
 ## 完了済み
@@ -16,33 +16,32 @@
 - test venv: `rpi-sensor-lib==0.2.0`、`pi4gpio-client==0.1.0`、`RPi.bme280==0.2.4`、`smbus2==0.6.1`、`pytz==2026.2`
 - week09ローカル版へ`SENSOR_SEND_INTERVAL_SEC`を追加。既定10秒、5秒指定可能、monotonic周期、超過周期の重複実行防止を実装
 - 実機week09には周期変更を未配備。現在も10秒direct運転
-- DBとjournalからdirect基準値を集計。現行の連続送信payload保持期間は19.308時間で、24時間には未到達
+- DBとjournalの両方から正式24時間direct基準値を取得し、`baselines/direct_24h_20260723.json`へ保存
 - journal解析が指定時間より1時間多く失敗行を数える不具合を発見し、正確な指定時間へ修正して回帰テストを追加
 - 修正版解析スクリプトをPiへ配置し、ローカル／Pi SHA-256一致を確認
 
-## 直近の部分基準値（2026-07-22 01:00 JST時点）
+## 正式24時間基準値（2026-07-23 10:21 JST）
 
-- 期間: 2026-07-21 05:38:35～2026-07-22 00:57:02（19.308時間）
-- timer: 6,948件、平均間隔10.005秒、最小9秒、最大11秒、10秒±0.5秒外39件
-- 成功率: light/sound/joystick/potentiometer 100%、DHT22 99.122%、BME280 99.928%、MH-Z19C 98.647%
-- 直近24時間journal: センサー失敗を含む周期1,831件、DHT22言及1,737件、BME280言及1,681件、MH-Z19C言及1,770件、通信エラー0件
-- journal失敗周期には複数センサー失敗で送信を抑止した周期も含むため、送信済み6,948件の欠損数とは一致しない
-- week09 PID 1253、pi4gpiod PID 967、両方active、`NRestarts=0`
+- journal/SQLiteとも23.999時間、timer 8,636件、button 0件
+- 平均間隔10.005秒、最小10秒、最大11秒、10秒±0.5秒外46件
+- 全7センサーの有効レコード8,636件、成功率100%
+- センサー失敗周期0件、DHT22/BME280/MH-Z19C失敗言及0件、通信エラー0件
+- 両経路でレコード数・周期統計・有効レコード数が一致。50秒ずれた窓による平均値の丸め差だけを確認
+- 取得前後ともweek09 PID 1253、pi4gpiod PID 967、sensor-server PID 223299、全てactive・`NRestarts=0`
 - 現行クライアントは取得処理時間を記録しないため、direct基準の処理時間は取得不能
 
-## 次回再開時の作業
+## 次の作業
 
-1. 2026-07-22 05:39 JST以降に`python3 /home/pi/pi4gpio/scripts/analyze_direct_journal.py --hours 24`を再実行
-2. `window.actual_hours`が約24時間なら正式なdirect基準値として`VERIFICATION_LOG.md`へ保存
-3. 正式基準値を追加する場合は、テスト後にPull Request #2の同じブランチへpush
-4. GitHub Actionsと差分を確認し、実機試験を行う保守時間帯を別途決める
+1. Pull Request #2の差分とGitHub Actionsを確認する
+2. week09を停止できる保守時間帯を決め、隔離したPi4gpio実機試験を実施する
+3. direct基準とPi4gpio試験の成功率・周期・値域・処理時間を比較する
 
 ## GitHub側の状態
 
 - `gh auth status`はユーザー`kazuki1729`で正常
 - `agent/prepare-pi4gpio-testing`をoriginへpush済み
 - Draft Pull Request #2: https://github.com/kazuki1729/pi4gpio/pull/2
-- 正式24時間基準と実機ハードウェア試験は未完了のため、Draftを維持する
+- 正式24時間基準は完了。実機ハードウェア試験は未完了のため、Draftを維持する
 
 ## 変更してはいけないもの
 
